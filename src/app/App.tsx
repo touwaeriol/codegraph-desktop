@@ -1153,7 +1153,34 @@ export default function App() {
                 settings={settings}
                 environment={environment}
                 busy={busy}
-                save={async (action) => {
+                detect={async (selectedPath) => {
+                  setBusy(true);
+                  setModalError("");
+                  try {
+                    const detected = await call<Environment>(
+                      selectedPath ? "set_codegraph_entry" : "detect_codegraph",
+                      selectedPath ? { selectedPath } : undefined,
+                    );
+                    setEnvironment(detected);
+                    environmentLoaded.current = true;
+                    if (!detected.available)
+                      throw new Error(
+                        detected.error || t("未找到可用的 CodeGraph"),
+                      );
+                    if (!detected.entry)
+                      throw new Error(t("检测未返回可用入口，请重新检测。"));
+                    await refresh();
+                    setError("");
+                    toast.success(t("CodeGraph 检测成功"));
+                    return detected;
+                  } catch (e) {
+                    setModalError(message(e));
+                    return null;
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                save={async (action, notify = true) => {
                   setBusy(true);
                   setModalError("");
                   try {
@@ -1161,7 +1188,7 @@ export default function App() {
                     setError("");
                     environmentLoaded.current = false;
                     await refresh();
-                    toast.success(t("设置已更新"));
+                    if (notify) toast.success(t("设置已更新"));
                   } catch (e) {
                     setModalError(message(e));
                   } finally {
@@ -1336,11 +1363,13 @@ function SettingsForm({
   environment,
   busy,
   save,
+  detect,
 }: {
   settings: Settings | null;
   environment: Environment | null;
   busy: boolean;
-  save: (action: () => Promise<unknown>) => Promise<void>;
+  save: (action: () => Promise<unknown>, notify?: boolean) => Promise<void>;
+  detect: (selectedPath: string) => Promise<Environment | null>;
 }) {
   const language = useLanguage();
   const [selectedLanguage, setSelectedLanguage] = useState<Language>(
@@ -1390,11 +1419,9 @@ function SettingsForm({
             variant="outline"
             disabled={busy || !desktop}
             onClick={() =>
-              void save(() =>
-                entry
-                  ? call("set_codegraph_entry", { selectedPath: entry })
-                  : call("detect_codegraph"),
-              )
+              void detect(entry.trim()).then((detected) => {
+                if (detected?.entry) setEntry(detected.entry);
+              })
             }
           >
             {t("检测并使用")}
@@ -1406,6 +1433,11 @@ function SettingsForm({
             : (environment?.error ?? t("尚未检测"))}
           {t("。更换入口后，运行实例需重启生效。")}
         </p>
+        {environment?.available && environment.entry && (
+          <p className="mono text-xs break-all" data-testid="detected-entry">
+            {t("实际入口：{0}", { 0: environment.entry })}
+          </p>
+        )}
         {environment?.available && environment.error && (
           <Alert>
             <TriangleAlert />
@@ -1459,7 +1491,9 @@ function SettingsForm({
         <Button
           variant="outline"
           disabled={!desktop}
-          onClick={() => void save(() => call("open_app_data_directory"))}
+          onClick={() =>
+            void save(() => call("open_app_data_directory"), false)
+          }
         >
           {t("打开数据目录")}
         </Button>

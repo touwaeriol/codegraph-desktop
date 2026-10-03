@@ -1,5 +1,9 @@
 // Chinese source messages are typed keys. Raw project and upstream text never passes through this catalog.
 export const english = {
+  "CodeGraph 检测成功": "CodeGraph detected successfully",
+  "实际入口：{0}": "Resolved entry: {0}",
+  "检测未返回可用入口，请重新检测。":
+    "Detection returned no usable entry. Please try again.",
   "正在读取设置…": "Loading settings…",
   成功: "Success",
   未修改: "Unchanged",

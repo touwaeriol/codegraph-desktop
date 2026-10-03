@@ -149,28 +149,58 @@ pub fn save_settings(
     Ok(settings)
 }
 pub fn entry(state: &AppState) -> Result<(PathBuf, project_gateway::CodeGraphEntry)> {
-    let selected = settings(state)?
-        .codegraph_entry
-        .map(PathBuf::from)
-        .or_else(|| which::which("codegraph").ok())
-        .ok_or_else(|| AppError::new("CLI_NOT_FOUND", "未找到 CodeGraph，请选择安装入口"))?;
-    let parsed =
-        project_gateway::resolve_entry(&selected).map_err(|e| AppError::new("CLI_NOT_FOUND", e))?;
-    Ok((selected, parsed))
+    let saved = settings(state)?.codegraph_entry;
+    crate::discovery::select_with(
+        saved.as_deref(),
+        &crate::discovery::SearchPaths::current(),
+        crate::discovery::resolve,
+    )
+    .map(|(_, resolved)| resolved)
 }
-async fn detect(state: &AppState) -> Environment {
-    let (selected, entry) = match entry(state) {
-        Ok(e) => e,
-        Err(e) => {
-            return Environment {
-                available: false,
-                entry: None,
-                version: None,
-                error: Some(e.message),
-            }
-        }
+async fn detect(state: &AppState) -> Result<Environment> {
+    let saved = settings(state)?.codegraph_entry;
+    let mut failure = Environment {
+        available: false,
+        entry: saved.clone(),
+        version: None,
+        error: Some(crate::i18n::message("未找到 CodeGraph，请选择安装入口")),
     };
-    detect_candidate(selected, entry).await
+    let mut seen = std::collections::HashSet::new();
+    for path in
+        crate::discovery::candidates(saved.as_deref(), &crate::discovery::SearchPaths::current())
+    {
+        if saved.is_none() && !path.is_file() {
+            continue;
+        }
+        let (selected, parsed) = match crate::discovery::resolve(&path) {
+            Ok(value) => value,
+            Err(error) => {
+                failure.entry = Some(path.to_string_lossy().into());
+                failure.error = Some(error.message);
+                continue;
+            }
+        };
+        if !seen.insert((parsed.program.clone(), parsed.prefix_args.clone())) {
+            continue;
+        }
+        let environment = detect_candidate(selected, parsed).await;
+        if environment.available {
+            let saved_successfully = crate::discovery::persist_detected(
+                &mut state.db.lock().unwrap(),
+                saved.as_deref(),
+                &environment,
+            )?;
+            if !saved_successfully {
+                return Err(AppError::new(
+                    "CONFIG_CHANGED",
+                    "检测期间入口设置已变化，请重新检测",
+                ));
+            }
+            return Ok(environment);
+        }
+        failure = environment;
+    }
+    Ok(failure)
 }
 async fn detect_candidate(
     selected: PathBuf,
@@ -230,11 +260,19 @@ async fn detect_candidate(
     environment
 }
 #[tauri::command]
-pub async fn detect_codegraph(state: State<'_, AppState>) -> Result<Environment> {
-    Ok(detect(&state).await)
+pub async fn detect_codegraph(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Environment> {
+    let environment = detect(&state).await?;
+    if environment.available {
+        state.recover_cli_index_errors(&app);
+    }
+    Ok(environment)
 }
 #[tauri::command]
 pub async fn set_codegraph_entry(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     selected_path: String,
 ) -> Result<Environment> {
@@ -250,6 +288,7 @@ pub async fn set_codegraph_entry(
         ));
     }
     persistence::set_setting(&state.db.lock().unwrap(), "codegraphEntry", &selected_path)?;
+    state.recover_cli_index_errors(&app);
     Ok(environment)
 }
 #[tauri::command]

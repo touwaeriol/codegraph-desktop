@@ -1,5 +1,6 @@
 mod commands;
 mod configuration;
+mod discovery;
 mod i18n;
 mod lifecycle;
 mod models;
@@ -32,6 +33,26 @@ pub struct AppState {
     active_indexes: AtomicUsize,
 }
 impl AppState {
+    fn recover_cli_index_errors(&self, app: &tauri::AppHandle) {
+        let changed = {
+            let mut snapshots = self.snapshots.lock().unwrap();
+            snapshots
+                .values_mut()
+                .filter_map(|snapshot| {
+                    if discovery::clear_cli_index_error(snapshot) {
+                        snapshot.sequence = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
+                        snapshot.timestamp = now();
+                        Some(snapshot.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        for snapshot in changed {
+            let _ = app.emit("project-state-changed", snapshot);
+        }
+    }
     fn project(&self, id: &str) -> Result<Project> {
         persistence::get(&self.db.lock().unwrap(), id)
     }

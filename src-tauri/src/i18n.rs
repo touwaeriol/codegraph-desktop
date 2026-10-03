@@ -79,6 +79,8 @@ pub fn translate(text: &str, language: &str) -> String {
         "无法分配本机 HTTP 端口"=>"Unable to allocate a local HTTP port",
         "无法分配未被其他项目登记的 HTTP 端口"=>"Unable to allocate an HTTP port not reserved by another project",
         "未找到 CodeGraph，请选择安装入口"=>"CodeGraph was not found. Select its installed entry point",
+        "CodeGraph 入口不存在或不是文件"=>"The CodeGraph entry does not exist or is not a file",
+        "检测期间入口设置已变化，请重新检测"=>"The entry setting changed during detection. Run detection again",
         "入口不支持 CodeGraph serve --mcp --path"=>"The selected entry does not support CodeGraph serve --mcp --path",
         "CodeGraph 检测失败"=>"CodeGraph detection failed",
         "CodeGraph 会话已退出，请重新启动"|"CodeGraph 会话异常退出，请重启"|"项目会话已退出，请重启"=>"The CodeGraph session has ended. Restart the project",
