@@ -1,0 +1,13 @@
+[package]
+name = "project-protocol"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+dirs = "6"
+uuid = { version = "1", features = ["v4"] }
+url = "2"
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }

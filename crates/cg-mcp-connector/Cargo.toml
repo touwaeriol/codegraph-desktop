@@ -1,0 +1,12 @@
+[package]
+name = "cg-mcp-connector"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+anyhow = "1"
+project-protocol = { path = "../project-protocol" }
+project-gateway = { path = "../project-gateway" }
+rmcp = { version = "=0.8.5", features = ["client", "server", "transport-io", "transport-streamable-http-client-reqwest"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = "0.12"
+ serde_json = "1"
