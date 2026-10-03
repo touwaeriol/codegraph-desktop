@@ -2,6 +2,12 @@
 
 日期：2026-10-03。本文件区分已运行检查和仍待完成的发布验收；设计文档中的性能预算不视为测量结果。
 
+## 0.1.5 原生兼容修复（2026-10-04）
+
+- 首轮原生 CI 发现 Linux 的 `rfd` 同时启用 GTK 与 XDG Portal，现已统一为 GTK 后端；macOS 对仅含僵尸进程的组发送信号可能返回 EPERM，现按准确进程组确认活成员，真正的权限错误仍拒绝成功。
+- 五种原生环境均已通过完整 Check：Windows 每架构 31 项 Rust 测试，macOS/Linux 每架构 34 项，另含前端构建、格式与 Clippy 检查。Unix 测试覆盖 SIGTERM 正常退出、忽略 SIGTERM 后强制退出及无关进程保留。
+- [手动打包验证](https://github.com/touwaeriol/codegraph-desktop/actions/runs/37137473703)不发布 Release；正式发布仍由版本标签触发。原生安装交互、签名/公证及干净机器验收未包含在这些构建检查中。
+
 ## 0.1.4 公共仓库与五平台发布（2026-10-04）
 
 - 新增原生发布矩阵：Windows AMD64/ARM64、macOS ARM64、Linux AMD64/ARM64；`v*` 标签通过全部构建后自动发布 Release 和 SHA256 文件。工作流通过 actionlint，发布校验脚本覆盖缺包、校验值不匹配和标签版本不匹配的拒绝情况。实际远端结果以 GitHub Actions 为准。

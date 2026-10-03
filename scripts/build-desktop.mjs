@@ -39,7 +39,8 @@ const supported = new Map([
     {
       platform: "macos",
       arch: "arm64",
-      bundles: "dmg",
+      // Explicit app keeps the .app bundle available for the subsequent pkgbuild.
+      bundles: "app,dmg",
       extensions: [".dmg", ".pkg"],
     },
   ],
