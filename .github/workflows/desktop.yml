@@ -77,10 +77,11 @@ jobs:
       - name: Check native desktop, frontend and Rust
         run: node scripts/build-desktop.mjs Check
       - name: Build native packages
-        if: startsWith(github.ref, 'refs/tags/v')
+        # Manual runs validate all installers without creating a public release.
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: node scripts/build-desktop.mjs Bundle
       - name: Upload packages and checksums
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.name }}
@@ -90,7 +91,7 @@ jobs:
 
   release:
     name: Publish complete release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 15

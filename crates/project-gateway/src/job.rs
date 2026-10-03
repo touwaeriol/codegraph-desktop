@@ -47,13 +47,17 @@ impl Drop for ProcessJob {
 #[cfg(unix)]
 pub struct ProcessJob {
     pgid: libc::pid_t,
+    terminated: std::sync::atomic::AtomicBool,
 }
 #[cfg(unix)]
 impl ProcessJob {
     pub fn attach(child: &tokio::process::Child) -> anyhow::Result<Self> {
         let pid = child.id().ok_or_else(|| anyhow::anyhow!("进程已退出"))? as libc::pid_t;
         anyhow::ensure!(unsafe { libc::getpgid(pid) } == pid, "进程未进入独立进程组");
-        Ok(Self { pgid: pid })
+        Ok(Self {
+            pgid: pid,
+            terminated: std::sync::atomic::AtomicBool::new(false),
+        })
     }
     fn signal(&self, signal: libc::c_int) -> std::io::Result<()> {
         if unsafe { libc::kill(-self.pgid, signal) } == 0 {
@@ -66,15 +70,60 @@ impl ProcessJob {
             Err(error)
         }
     }
-    fn exists(&self) -> bool {
-        (unsafe { libc::kill(-self.pgid, 0) }) == 0
-            || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    fn has_live_members(&self) -> std::io::Result<bool> {
+        let output = std::process::Command::new("/bin/ps")
+            .args(["-axo", "pgid=,stat="])
+            .env("LC_ALL", "C")
+            .output()?;
+        if !output.status.success() {
+            return Err(std::io::Error::other("无法读取进程组状态"));
+        }
+        let text = std::str::from_utf8(&output.stdout)
+            .map_err(|_| std::io::Error::other("进程组状态编码无效"))?;
+        group_has_live_members(text, self.pgid)
     }
+    fn finish(&self) {
+        self.terminated
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn signal_live_group(&self, signal: libc::c_int) -> std::io::Result<()> {
+        match self.signal(signal) {
+            Ok(()) => Ok(()),
+            // Darwin may deny signalling a group containing only zombies. Never
+            // suppress a permission error while any executable member remains.
+            Err(error) => {
+                if self.has_live_members()? {
+                    Err(error)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+#[cfg(unix)]
+fn group_has_live_members(text: &str, pgid: libc::pid_t) -> std::io::Result<bool> {
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let mut fields = line.split_whitespace();
+        let group = fields
+            .next()
+            .and_then(|v| v.parse::<libc::pid_t>().ok())
+            .ok_or_else(|| std::io::Error::other("进程组状态格式无效"))?;
+        let state = fields
+            .next()
+            .ok_or_else(|| std::io::Error::other("进程状态缺失"))?;
+        if group == pgid && !state.starts_with('Z') {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 #[cfg(unix)]
 impl Drop for ProcessJob {
     fn drop(&mut self) {
-        let _ = self.signal(libc::SIGKILL);
+        if !self.terminated.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = self.signal_live_group(libc::SIGKILL);
+        }
     }
 }
 /// Spawn suspended on Windows, attach the Job before user code can create
@@ -151,16 +200,27 @@ impl ProcessJob {
         }
         #[cfg(unix)]
         {
-            self.signal(libc::SIGTERM)?;
+            if !self.has_live_members()? {
+                self.finish();
+                return Ok(());
+            }
+            self.signal_live_group(libc::SIGTERM)?;
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-            while self.exists() && tokio::time::Instant::now() < deadline {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            while self.has_live_members()? && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
-            if self.exists() {
-                self.signal(libc::SIGKILL)?;
+            if self.has_live_members()? {
+                self.signal_live_group(libc::SIGKILL)?;
             }
-            // Parent owns/reaps the leader Child. kill(0) can still see its zombie
-            // until that wait; do not confuse that with a live executing process.
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+            while self.has_live_members()? {
+                anyhow::ensure!(
+                    tokio::time::Instant::now() < deadline,
+                    "进程组仍含活进程，停止未确认"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            self.finish();
             Ok(())
         }
     }
@@ -170,8 +230,7 @@ impl ProcessJob {
 mod unix_tests {
     use super::*;
     use tokio::io::{AsyncBufReadExt, BufReader};
-    #[tokio::test]
-    async fn stopping_owned_group_stops_descendant_and_preserves_other_process() {
+    async fn check_group_cleanup(script: &str) {
         let mut unrelated = tokio::process::Command::new("/bin/sleep")
             .arg("60")
             .kill_on_drop(true)
@@ -179,7 +238,7 @@ mod unix_tests {
             .unwrap();
         let mut command = tokio::process::Command::new("/bin/sh");
         command
-            .args(["-c", "sleep 60 & echo $!; wait"])
+            .args(["-c", script])
             .stdout(std::process::Stdio::piped());
         let (mut child, job) = spawn_owned(&mut command).unwrap();
         let mut line = String::new();
@@ -206,5 +265,20 @@ mod unix_tests {
         assert!(unrelated.try_wait().unwrap().is_none());
         unrelated.kill().await.unwrap();
         unrelated.wait().await.unwrap();
+    }
+    #[test]
+    fn zombie_groups_are_distinct_from_running_or_uninterruptible_members() {
+        assert!(!group_has_live_members("42 Z\n42 Z+\n43 S\n", 42).unwrap());
+        assert!(group_has_live_members("42 Z\n42 S\n", 42).unwrap());
+        assert!(group_has_live_members("42 D\n", 42).unwrap());
+        assert!(group_has_live_members("bad state\n", 42).is_err());
+    }
+    #[tokio::test]
+    async fn stopping_owned_group_stops_descendant_and_preserves_other_process() {
+        check_group_cleanup("sleep 60 & echo $!; wait").await;
+    }
+    #[tokio::test]
+    async fn sigterm_resistant_group_requires_confirmed_sigkill_cleanup() {
+        check_group_cleanup("trap '' TERM; sleep 60 & echo $!; wait").await;
     }
 }

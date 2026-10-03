@@ -1391,7 +1391,7 @@ function SettingsForm({
         </Button>
       </Field>
       <p className="text-xs text-muted-foreground">
-        CodeGraph Desktop 0.1.4 · 开发构建
+        CodeGraph Desktop 0.1.5 · 开发构建
         <br />
         完全退出应用会停止受管实例。
       </p>
