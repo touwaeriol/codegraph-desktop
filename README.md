@@ -1,99 +1,124 @@
 # CodeGraph Desktop
 
-基于 **Tauri 2 + React + TypeScript + Vite** 的 CodeGraph 项目管理桌面应用。
+**English** | [简体中文](README.zh-CN.md)
 
-每个项目独立启动 CodeGraph，使用独立索引、运行状态、日志和本地服务端口。项目中的 Codex 与 Claude Code 通过项目级 MCP 配置连接对应实例。
+A desktop project manager for CodeGraph, built with **Tauri 2 + React + TypeScript + Vite**.
 
-## 当前阶段
+Each project runs its own CodeGraph instance with a separate index, runtime state, logs, and local service port. Codex and Claude Code connect to the corresponding instance through project-level MCP configuration.
 
-源码包含 React 界面、Tauri/Rust 后端、项目网关与旧配置兼容连接器。构建、协议及安装回归的范围见 [验证记录](docs/05-validation.md)。首次客户端信任、原生窗口交互与干净机器安装仍需单独验收。
+[GitHub repository](https://github.com/touwaeriol/codegraph-desktop) · [Download releases](https://github.com/touwaeriol/codegraph-desktop/releases) · [GitHub Actions](https://github.com/touwaeriol/codegraph-desktop/actions)
 
-[GitHub 公共仓库](https://github.com/touwaeriol/codegraph-desktop) · [下载 Release](https://github.com/touwaeriol/codegraph-desktop/releases) · [Actions 构建](https://github.com/touwaeriol/codegraph-desktop/actions)
+## Supported platforms
 
-| 系统 | 架构 | 发布格式 |
+| Platform | Architecture | Packages |
 | --- | --- | --- |
-| Windows | AMD64、ARM64 | NSIS `.exe` |
-| macOS | ARM64（Apple Silicon） | `.dmg`、`.pkg` |
-| Linux | AMD64、ARM64 | `.deb`、`.AppImage` |
+| Windows | AMD64, ARM64 | NSIS `.exe` |
+| macOS | ARM64 (Apple Silicon) | `.dmg`, `.pkg` |
+| Linux | AMD64, ARM64 | `.deb`, `.AppImage` |
 
-Release 只有在五个原生构建与检查全部成功后才发布，每个平台提供 SHA256 校验文件。当前未配置 Windows 代码签名或 Apple 签名/公证，产物为未签名构建。
+A release is published only after all five native builds and checks succeed. Each platform includes a SHA-256 checksum file. Windows code signing and Apple signing/notarization are not currently configured.
 
-Windows 安装器检测到已有安装后直接覆盖原目录，不显示“先卸载旧版本”的维护选项。主程序和连接器一起替换，Windows 设置中的独立卸载入口仍保留。已通过独立测试身份的静默覆盖升级及卸载回归，未操作用户的正式安装。
+The repository includes the React interface, Tauri/Rust backend, project gateway, and a compatibility connector for older configurations. See the [validation record (Chinese)](docs/05-validation.md) for completed checks and remaining acceptance work. Initial client trust, native window interactions, and installation on clean machines require separate acceptance testing.
 
-更新前会先请求应用停止受管 CodeGraph 和索引任务，再退出并释放程序文件。Windows 对不支持新退出协议的旧版本保留精确路径进程关闭兼容；Linux DEB 和 macOS PKG 会等待标准安装路径的应用退出，超时则停止安装。DMG 拖拽与 AppImage 文件替换没有安装前钩子，使用这两种格式时应先从托盘退出应用。不会按名称全局终止其他项目的 Node/CodeGraph。
+## Installation and upgrades
 
-## 0.1.3 HTTP 直连与配置编辑
+Download the package for your system and architecture from [Releases](https://github.com/touwaeriol/codegraph-desktop/releases).
 
-- 项目 MCP 服务统一命名为 `codegraph`，Codex 和 Claude Code 直接通过 Streamable HTTP 连接本机项目网关，不再启动客户端 stdio 连接器。网关到 CodeGraph 仍使用原生 stdio。
-- 每项目持久保存固定端口和鉴权令牌；重启不改变配置，端口占用时明确报错，不自动改端口。使用前需在桌面软件启动该项目。
-- 已配置旧版的项目需重新“预览并配置”，确认从 command/args 迁移为 URL 与鉴权头。保留连接器二进制用于旧配置兼容，新生成配置不再引用它。
-- “预览并配置”可按文件选择合并配置、覆盖整个文件或编辑完整内容。覆盖会删除该文件其他设置，必须核对差异后应用。
-- 编辑后点击“重新读取 / 刷新预览”，语法校验通过才能应用；外部编辑器修改文件后也可刷新，窗口内草稿会保留。
-- 原配置无法解析时，可从错误提示进入“以覆盖模式预览”，再切换编辑修复；这一步不会写入文件。
-- 应用前备份原文件并检查外部修改。手动更改或删除 `codegraph` 的 URL/鉴权字段后，该条目可能不再连接当前项目，也不再登记为本项目受管条目。项目配置含本机鉴权信息，不应上传或分享这些令牌。
+On Windows, an existing installation is updated in the same directory without uninstalling the previous version first. The application and connector are replaced together. A separate uninstall entry remains available in Windows Settings. Silent in-place upgrade and uninstall regression checks use an isolated test installation.
 
-## 本地开发
+Before an update, the application is asked to stop managed CodeGraph processes and indexing tasks, then exit and release its executable files. Windows retains an exact-path process shutdown fallback for older versions. Linux DEB and macOS PKG installers wait for the application at the standard installation path to exit, and abort on timeout. DMG drag-and-drop installation and manual AppImage replacement have no pre-install hook: quit the application from its tray menu before replacing those files. Other projects' Node/CodeGraph processes are not globally terminated by name.
 
-通用依赖：Node.js 22+、Rust stable，以及本机安装的 CodeGraph。按目标系统安装 [Tauri 原生构建依赖](https://v2.tauri.app/start/prerequisites/)：Windows 使用 MSVC/Windows SDK/WebView2，macOS 使用 Xcode 命令行工具，Linux 使用 WebKitGTK 4.1、GTK/AppIndicator 等依赖。每种架构在对应原生环境构建。
+These are installer upgrade flows. In-app automatic update downloads are not yet implemented.
 
-```powershell
+## Language
+
+On first launch, the application uses the system's preferred display language: Chinese locales use Simplified Chinese; other languages fall back to English. Open **Settings → Display language**, choose **English** or **简体中文**, and save your preferences. The interface and tray menu update immediately, and your choice is retained across restarts.
+
+The Windows installer automatically uses Simplified Chinese on Chinese-language systems and English otherwise, without a language-selection dialog. The macOS/Linux system installer interface follows the operating system's own language settings. Project names, paths, configuration contents, and raw CodeGraph output are preserved in their original language.
+
+## MCP connections and configuration editing
+
+- Project MCP services use the name `codegraph`. Codex and Claude Code connect directly to the local project gateway over Streamable HTTP. The gateway uses CodeGraph's native stdio transport upstream.
+- Each project persistently stores a fixed port and authentication token. Restarting does not change its configuration. An occupied port causes an explicit error instead of silently changing ports. Start the project in the desktop application before connecting a client.
+- To migrate an older configuration, open **Preview and configure** again and review the change from command/args to a URL and authentication header. The compatibility connector remains bundled, but new configurations do not reference it.
+- For each file in the preview, choose to merge settings, overwrite the entire file, or edit its complete contents. Overwriting removes other settings in that file; review the diff before applying it.
+- After editing, refresh the preview. Syntax validation must pass before applying changes. Refreshing after an external editor changes the file preserves your draft in the preview window.
+- If the original configuration cannot be parsed, open a preview in overwrite mode, then switch to editing to repair it. Opening the preview does not write the file.
+- Applying a configuration backs up the original files and checks for external changes. Manually changing or removing the `codegraph` URL or authentication fields may disconnect that entry from the project and remove its managed status. Configuration contains local authentication credentials: do not upload or share these tokens.
+
+## Local development
+
+Prerequisites: Node.js 22+, Rust stable, and a local CodeGraph installation. Install the [Tauri native build prerequisites](https://v2.tauri.app/start/prerequisites/) for your system: MSVC, Windows SDK, and WebView2 on Windows; Xcode Command Line Tools on macOS; WebKitGTK 4.1, GTK, and AppIndicator dependencies on Linux. Each architecture is built on its native environment.
+
+```sh
 npm ci
-# 前端浏览器预览：明确显示桌面环境未连接，不生成假项目
+
+# Browser preview shows that the desktop backend is disconnected;
+# it does not generate fake projects.
 npm run dev
 
-# 跨平台检查与打包（五种目标系统/架构）
+# Check or package any of the five supported native targets.
 node scripts/build-desktop.mjs Check
 node scripts/build-desktop.mjs Bundle
 
-# 生成连接器、检查前端构建、执行 Rust 测试和 Clippy
+# Launch the desktop application, preparing its connector first.
+node scripts/build-desktop.mjs Dev
+```
+
+Additional Windows PowerShell entry points:
+
+```powershell
+# Build the connector, check the frontend, and run Rust tests and Clippy.
 ./scripts/build-desktop.ps1 -Mode Check
 
-# 使用真实 CodeGraph 样例运行双项目 / 双客户端 MCP 测试
+# Test two projects and two MCP clients against a real CodeGraph instance.
 ./scripts/build-desktop.ps1 -Mode Mcp
 
-# 启动实际桌面应用；先生成随应用使用的连接器
+# Launch the desktop application.
 ./scripts/build-desktop.ps1 -Mode Dev
 
-# 构建 Windows NSIS 安装包，自动包含连接器
+# Build the Windows NSIS installer, including the connector.
 ./scripts/build-desktop.ps1 -Mode Bundle
 ```
 
-原始包位于 `target/release/bundle/`；标准化安装包与校验文件位于 `target/release-assets/<系统>-<架构>/`。CI 配置位于 `.github/workflows/desktop.yml`。
+Raw packages are written to `target/release/bundle/`. Standardized packages and checksum files are written to `target/release-assets/<platform>-<architecture>/`. The CI workflow is `.github/workflows/desktop.yml`.
 
-`Mcp` 模式默认使用当前用户 npm 安装的 CodeGraph；其他位置可通过 `-CodeGraphBundle` 和 `-CodeGraphEntry` 指定。样例项目创建在临时目录，测试不修改用户项目。这个模式使用模拟 MCP 客户端，不替代 Codex / Claude Code 的真实客户端联调。
+The `Mcp` mode uses the current user's npm-installed CodeGraph by default. Override its location with `-CodeGraphBundle` and `-CodeGraphEntry`. Sample projects are created in temporary directories; user projects are not modified. This mode uses simulated MCP clients and does not replace integration testing with actual Codex or Claude Code clients. See the [client testing guide (Chinese)](tests/clients/README.md) for real-client scripts and model-service limitations.
 
-真实客户端联调脚本及模型服务限制见 [客户端测试说明](tests/clients/README.md)。
+Before invoking `cargo test --workspace` or `npm run tauri` directly, generate the connector sidecar required by Tauri. The build scripts handle its platform-specific filename. They check development dependencies but do not install system tools automatically.
 
-直接调用 `cargo test --workspace` 或 `npm run tauri` 前，需先生成 Tauri 所需的连接器 sidecar；统一脚本会处理其目标平台命名。构建脚本仅检查开发依赖，不自动安装系统工具。
+## Source layout
 
-## 源码结构
+- `src/`: workspace UI, project management, configuration previews, logs, and settings.
+- `src-tauri/`: Tauri IPC, SQLite persistence, configuration management, indexing tasks, and application lifecycle.
+- `crates/project-protocol/`: private runtime records and shared protocol data.
+- `crates/project-gateway/`: CodeGraph entry-point resolution, process management, and the multi-session MCP gateway.
+- `crates/cg-mcp-connector/`: connector from client stdio to the project gateway.
+- `tests/m0/`: technical validation scripts for the real upstream service.
+- `scripts/`: native build and release scripts, plus Windows development and testing entry points.
 
-- `src/`：中文工作台、项目管理、配置预览、日志与设置。
-- `src-tauri/`：Tauri IPC、SQLite、配置文件管理、索引任务与应用生命周期。
-- `crates/project-protocol/`：私有运行记录及共享协议数据。
-- `crates/project-gateway/`：CodeGraph 入口适配、进程管理和多会话 MCP 网关。
-- `crates/cg-mcp-connector/`：客户端 stdio 到项目网关的连接器。
-- `tests/m0/`：真实上游技术验证脚本及证据。
-- `scripts/`：Windows 检查、开发与打包入口。
+## Design and release documentation
 
-## 设计文档
+Detailed engineering documents are currently in Chinese:
 
-- [产品需求与范围](docs/01-product-requirements.md)：用户流程、项目隔离约束、首版范围与验收目标。
-- [系统设计](docs/02-system-design.md)：进程架构、MCP 桥接、数据模型、配置写入和运行生命周期。
-- [UI 设计](docs/03-ui-design.md)：导航、页面线框、视觉规范、交互及异常状态。
-- [实施与验收计划](docs/04-implementation-plan.md)：技术验证、开发顺序、测试场景及发布条件。
+- [Product requirements and scope](docs/01-product-requirements.md): workflows, project isolation, initial scope, and acceptance criteria.
+- [System design](docs/02-system-design.md): process architecture, MCP bridging, data model, configuration writes, and runtime lifecycle.
+- [UI design](docs/03-ui-design.md): navigation, page wireframes, visual rules, interactions, and error states.
+- [Implementation and acceptance plan](docs/04-implementation-plan.md): technical validation, implementation order, test scenarios, and release requirements.
+- [Validation record](docs/05-validation.md): completed checks and remaining acceptance work.
+- [Release guide](docs/06-release.md): version tags, GitHub Actions, package upgrades, and files excluded from the public repository.
 
-## 核心约定
+## Core conventions
 
-1. 一个已启动项目对应一个受管 CodeGraph 服务实例；一个实例可包含上游自身的工作进程。
-2. 不同项目不共享运行实例、索引数据库或请求队列。
-3. 同一项目的 Codex 与 Claude Code 共用该项目实例，不因新增客户端连接而启动第二个 CodeGraph。
-4. CodeGraph 可共用一份安装；“实例独立”不等于“每个项目重复安装”。
-5. MCP 配置分别写入项目的 `.codex/config.toml` 和 `.mcp.json`，不修改全局客户端配置。
-6. 默认仅本机访问。程序退出时停止受管服务；关闭窗口默认保留托盘运行。
+1. Each started project has one managed CodeGraph service instance, which may include CodeGraph's own worker processes.
+2. Projects do not share running instances, index databases, or request queues.
+3. Codex and Claude Code for the same project share its instance. Adding a client does not start a second CodeGraph instance.
+4. Projects can share one CodeGraph installation; separate instances do not require repeated installations.
+5. MCP settings are written to the project's `.codex/config.toml` and `.mcp.json`. Global client configuration is not modified.
+6. Access is local-only by default. Exiting stops managed services; closing the window leaves the application running in the tray by default.
 
-## 阅读说明
+## Reading notes
 
-文档更新：2026-10-04。发布矩阵包含上述五种原生目标，具体构建结果以 Actions 为准。首版验证基线为当前机器上的 CodeGraph 1.6.2，不将此版本视为永久最新版本。
+Documentation updated on October 4, 2026. GitHub Actions provides the actual build results for the five native targets above. The initial validation baseline used CodeGraph 1.6.2 on the development machine; this is not a claim that it will remain the latest version.
 
-图中的项目名称、UUID、端口和路径均为示例，不代表已经创建或启动的实例。
+Project names, UUIDs, ports, and paths in diagrams are examples, not evidence that those instances have been created or started.

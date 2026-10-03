@@ -29,6 +29,7 @@ export interface RuntimeSnapshot {
   error?: { code: string; message: string; retryable: boolean } | null;
 }
 export interface Settings {
+  language: "en" | "zh-CN";
   codegraphEntry: string | null;
   indexConcurrency: number;
   closeBehavior: "tray" | "exit";

@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppError {
+    #[serde(skip)]
+    pub source_message: Option<String>,
     pub code: String,
     pub message: String,
     pub retryable: bool,
@@ -10,12 +12,31 @@ pub struct AppError {
 }
 impl AppError {
     pub fn new(code: &str, message: impl ToString) -> Self {
+        let source_message = message.to_string();
         Self {
             code: code.into(),
-            message: message.to_string(),
+            message: crate::i18n::message(&source_message),
+            source_message: Some(source_message),
             retryable: true,
             existing_project_id: None,
         }
+    }
+}
+impl Serialize for AppError {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut out = serializer.serialize_struct("AppError", 4)?;
+        out.serialize_field("code", &self.code)?;
+        out.serialize_field(
+            "message",
+            &crate::i18n::message(self.source_message.as_deref().unwrap_or(&self.message)),
+        )?;
+        out.serialize_field("retryable", &self.retryable)?;
+        out.serialize_field("existingProjectId", &self.existing_project_id)?;
+        out.end()
     }
 }
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -47,6 +68,7 @@ pub struct Project {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    pub language: String,
     pub codegraph_entry: Option<String>,
     pub index_concurrency: usize,
     pub close_behavior: String,
@@ -115,6 +137,7 @@ pub struct TaskProgress {
     pub timestamp: String,
     pub kind: String,
     pub state: String,
+    #[serde(serialize_with = "crate::i18n::serialize_message")]
     pub message: String,
     pub error: Option<AppError>,
     pub started_at: String,

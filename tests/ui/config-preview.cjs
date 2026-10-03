@@ -21,7 +21,7 @@ const fs = require('node:fs');
           window.__uiTest.calls.push({ command, args });
           if (command.startsWith('plugin:event|')) return ++sequence;
           if (command === 'list_projects') return [project];
-          if (command === 'get_settings') return { codegraphEntry: null, indexConcurrency: 1, closeBehavior: 'tray', appDataDir: 'D:\\fixture-data' };
+          if (command === 'get_settings') return { language: 'zh-CN', codegraphEntry: null, indexConcurrency: 1, closeBehavior: 'tray', appDataDir: 'D:\\fixture-data' };
           if (command === 'detect_codegraph') return { available: true, entry: 'fixture.js', version: 'test', error: null };
           if (command === 'get_project_snapshot') return { projectId: project.id, generation: 'test', sequence: 1, state: 'stopped', sessions: 0, indexState: 'ready', indexStats: null };
           if (['read_logs', 'get_project_tasks', 'list_config_backups'].includes(command)) return [];

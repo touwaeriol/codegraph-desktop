@@ -1,5 +1,6 @@
 mod commands;
 mod configuration;
+mod i18n;
 mod lifecycle;
 mod models;
 mod persistence;
@@ -127,7 +128,11 @@ impl AppState {
             state: state.into(),
             message: error
                 .as_ref()
-                .map(|e| e.message.clone())
+                .map(|e| {
+                    e.source_message
+                        .clone()
+                        .unwrap_or_else(|| e.message.clone())
+                })
                 .unwrap_or_else(|| state.into()),
             error,
         };
@@ -139,6 +144,24 @@ impl AppState {
     }
 }
 static UPDATE_SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+struct TrayLabels {
+    show: tauri::menu::MenuItem<tauri::Wry>,
+    stop: tauri::menu::MenuItem<tauri::Wry>,
+    quit: tauri::menu::MenuItem<tauri::Wry>,
+}
+fn update_tray_language(app: &tauri::AppHandle) -> Result<()> {
+    if let Some(labels) = app.try_state::<TrayLabels>() {
+        for (item, zh, en) in [
+            (&labels.show, "显示主窗口", "Show window"),
+            (&labels.stop, "停止全部", "Stop all projects"),
+            (&labels.quit, "退出", "Quit"),
+        ] {
+            item.set_text(i18n::tr(zh, en))
+                .map_err(|e| AppError::new("TRAY_UPDATE_FAILED", e))?;
+        }
+    }
+    Ok(())
+}
 fn shutdown(app: tauri::AppHandle) {
     let Some(state) = app.try_state::<AppState>() else {
         UPDATE_SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
@@ -193,7 +216,10 @@ fn shutdown(app: tauri::AppHandle) {
                         &id,
                         "info",
                         "shutdown",
-                        "受管 CodeGraph 已停止，桌面即将退出",
+                        i18n::tr(
+                            "受管 CodeGraph 已停止，桌面即将退出",
+                            "Managed CodeGraph has stopped. The desktop application is exiting",
+                        ),
                     );
                 }
                 Ok((id, false)) => {
@@ -203,7 +229,7 @@ fn shutdown(app: tauri::AppHandle) {
                         &id,
                         "error",
                         "shutdown",
-                        "进程停止或运行记录清理失败，已回收本应用持有的进程资源",
+                        i18n::tr("进程停止或运行记录清理失败，已回收本应用持有的进程资源","Process shutdown or runtime record cleanup failed; owned process resources have been released"),
                     );
                 }
                 Err(_) => clean = false,
@@ -261,6 +287,7 @@ pub fn run() {
             configuration::private_dir(&data).map_err(|e| std::io::Error::other(e.message))?;
             configuration::mark_interrupted(&data).map_err(|e| std::io::Error::other(e.message))?;
             let db = persistence::open(&data).map_err(|e| std::io::Error::other(e.message))?;
+            i18n::set(&persistence::language(&db).map_err(|e| std::io::Error::other(e.message))?);
             app.manage(AppState {
                 db: Mutex::new(db),
                 data,
@@ -286,10 +313,24 @@ pub fn run() {
                 menu::{Menu, MenuItem},
                 tray::TrayIconBuilder,
             };
-            let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-            let stop = MenuItem::with_id(app, "stop", "停止全部", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let show = MenuItem::with_id(
+                app,
+                "show",
+                i18n::tr("显示主窗口", "Show window"),
+                true,
+                None::<&str>,
+            )?;
+            let stop = MenuItem::with_id(
+                app,
+                "stop",
+                i18n::tr("停止全部", "Stop all projects"),
+                true,
+                None::<&str>,
+            )?;
+            let quit =
+                MenuItem::with_id(app, "quit", i18n::tr("退出", "Quit"), true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &stop, &quit])?;
+            app.manage(TrayLabels { show, stop, quit });
             let mut tray =
                 TrayIconBuilder::new()
                     .menu(&menu)
@@ -418,8 +459,26 @@ pub fn run() {
             let data = project_protocol::runtime_dir()
                 .ok()
                 .and_then(|p| p.parent().map(|v| v.to_string_lossy().to_string()))
-                .unwrap_or_else(|| "无法取得应用数据目录".into());
-            rfd::MessageDialog::new().set_title("CodeGraph Desktop 启动失败").set_level(rfd::MessageLevel::Error).set_description(format!("应用无法启动：{error}\n\n应用数据目录：{data}\n\n请保留 app.db 与 backups 目录以便恢复。应用没有重置数据库。" )).show();
+                .unwrap_or_else(|| {
+                    i18n::tr(
+                        "无法取得应用数据目录",
+                        "Application data directory unavailable",
+                    )
+                    .into()
+                });
+            let description = if i18n::current() == "zh-CN" {
+                format!("应用无法启动：{error}\n\n应用数据目录：{data}\n\n请保留 app.db 与 backups 目录以便恢复。应用没有重置数据库。")
+            } else {
+                format!("The application could not start: {error}\n\nApplication data directory: {data}\n\nPreserve app.db and the backups directory for recovery. The database has not been reset.")
+            };
+            rfd::MessageDialog::new()
+                .set_title(i18n::tr(
+                    "CodeGraph Desktop 启动失败",
+                    "CodeGraph Desktop could not start",
+                ))
+                .set_level(rfd::MessageLevel::Error)
+                .set_description(description)
+                .show();
             return;
         }
     };

@@ -1,5 +1,7 @@
+import { t, useLanguage } from "@/lib/i18n";
 import { useEffect, useState } from "react";
 export function Elapsed({ since }: { since: string }) {
+  useLanguage();
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -11,8 +13,11 @@ export function Elapsed({ since }: { since: string }) {
   );
   return (
     <span className="mono text-sm">
-      {Math.floor(seconds / 3600)} 时 {Math.floor(seconds / 60) % 60} 分{" "}
-      {seconds % 60} 秒
+      {Math.floor(seconds / 3600)}
+      {t("时")}
+      {Math.floor(seconds / 60) % 60}
+      {t("分")} {seconds % 60}
+      {t("秒")}
     </span>
   );
 }

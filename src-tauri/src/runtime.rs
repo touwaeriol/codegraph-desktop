@@ -156,7 +156,10 @@ pub async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result
         id,
         "info",
         "runtime",
-        "CodeGraph MCP 握手与工具列表验证通过",
+        crate::i18n::tr(
+            "CodeGraph MCP 握手与工具列表验证通过",
+            "CodeGraph MCP handshake and tool list verified",
+        ),
     );
     Ok(())
 }
@@ -178,7 +181,16 @@ pub async fn stop(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<
         s.started_at = None;
         s.error = None;
         state.publish(app, s);
-        state.log(app, id, "info", "runtime", "项目网关及受管进程已停止");
+        state.log(
+            app,
+            id,
+            "info",
+            "runtime",
+            crate::i18n::tr(
+                "项目网关及受管进程已停止",
+                "Project gateway and managed processes stopped",
+            ),
+        );
     } else {
         project_protocol::remove_runtime(id)
             .map_err(|e| AppError::new("RUNTIME_RECORD_FAILED", e))?;

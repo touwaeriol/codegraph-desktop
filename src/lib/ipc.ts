@@ -1,3 +1,4 @@
+import { t, useLanguage } from "@/lib/i18n";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 export const desktop = isTauri();
@@ -7,7 +8,7 @@ export function call<T>(
 ): Promise<T> {
   if (!desktop)
     return Promise.reject(
-      new Error("桌面环境未连接，请在 CodeGraph Desktop 中执行此操作。"),
+      new Error(t("桌面环境未连接，请在 CodeGraph Desktop 中执行此操作。")),
     );
   return invoke<T>(command, args);
 }

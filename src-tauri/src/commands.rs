@@ -116,6 +116,7 @@ pub fn get_settings(state: State<AppState>) -> Result<Settings> {
 pub fn settings(state: &AppState) -> Result<Settings> {
     let db = state.db.lock().unwrap();
     Ok(Settings {
+        language: persistence::language(&db)?,
         codegraph_entry: persistence::setting(&db, "codegraphEntry")?,
         index_concurrency: persistence::setting(&db, "indexConcurrency")?
             .and_then(|s| s.parse().ok())
@@ -127,20 +128,25 @@ pub fn settings(state: &AppState) -> Result<Settings> {
 }
 #[tauri::command]
 pub fn save_settings(
+    app: tauri::AppHandle,
     state: State<AppState>,
     index_concurrency: usize,
     close_behavior: String,
+    language: Option<String>,
 ) -> Result<Settings> {
-    if !(1..=4).contains(&index_concurrency) || !["tray", "exit"].contains(&close_behavior.as_str())
     {
-        return Err(AppError::new("INVALID_SETTINGS", "设置值超出允许范围"));
+        let mut db = state.db.lock().unwrap();
+        persistence::save_preferences(
+            &mut db,
+            index_concurrency,
+            &close_behavior,
+            language.as_deref(),
+        )?;
     }
-    {
-        let db = state.db.lock().unwrap();
-        persistence::set_setting(&db, "indexConcurrency", &index_concurrency.to_string())?;
-        persistence::set_setting(&db, "closeBehavior", &close_behavior)?;
-    }
-    settings(&state)
+    let settings = settings(&state)?;
+    crate::i18n::set(&settings.language);
+    crate::update_tray_language(&app)?;
+    Ok(settings)
 }
 pub fn entry(state: &AppState) -> Result<(PathBuf, project_gateway::CodeGraphEntry)> {
     let selected = settings(state)?
@@ -177,46 +183,51 @@ async fn detect_candidate(
         .kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(0x08000000);
-    match tokio::time::timeout(std::time::Duration::from_secs(15), command.output()).await {
-        Ok(Ok(o)) if o.status.success() => {
-            let version = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            let mut help = tokio::process::Command::new(&entry.program);
-            help.args(&entry.prefix_args)
-                .args(["help", "serve"])
-                .kill_on_drop(true);
-            #[cfg(windows)]
-            help.creation_flags(0x08000000);
-            let capability =
-                tokio::time::timeout(std::time::Duration::from_secs(15), help.output())
-                    .await
-                    .ok()
-                    .and_then(|r| r.ok())
-                    .is_some_and(|out| {
-                        let text = String::from_utf8_lossy(&out.stdout);
-                        out.status.success() && text.contains("--mcp") && text.contains("--path")
-                    });
-            Environment {
-                available: capability,
-                entry: Some(selected.to_string_lossy().into()),
-                version: Some(version.clone()),
-                error: if !capability {
-                    Some("入口不支持 CodeGraph serve --mcp --path".into())
-                } else if version != "1.6.2" {
-                    Some(format!(
-                        "版本 {version} 尚未通过兼容性验证；当前基线为 1.6.2"
-                    ))
-                } else {
-                    None
-                },
+    let mut environment =
+        match tokio::time::timeout(std::time::Duration::from_secs(15), command.output()).await {
+            Ok(Ok(o)) if o.status.success() => {
+                let version = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                let mut help = tokio::process::Command::new(&entry.program);
+                help.args(&entry.prefix_args)
+                    .args(["help", "serve"])
+                    .kill_on_drop(true);
+                #[cfg(windows)]
+                help.creation_flags(0x08000000);
+                let capability =
+                    tokio::time::timeout(std::time::Duration::from_secs(15), help.output())
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .is_some_and(|out| {
+                            let text = String::from_utf8_lossy(&out.stdout);
+                            out.status.success()
+                                && text.contains("--mcp")
+                                && text.contains("--path")
+                        });
+                Environment {
+                    available: capability,
+                    entry: Some(selected.to_string_lossy().into()),
+                    version: Some(version.clone()),
+                    error: if !capability {
+                        Some("入口不支持 CodeGraph serve --mcp --path".into())
+                    } else if version != "1.6.2" {
+                        Some(format!(
+                            "版本 {version} 尚未通过兼容性验证；当前基线为 1.6.2"
+                        ))
+                    } else {
+                        None
+                    },
+                }
             }
-        }
-        other => Environment {
-            available: false,
-            entry: Some(selected.to_string_lossy().into()),
-            version: None,
-            error: Some(format!("CodeGraph 版本检测失败：{other:?}")),
-        },
-    }
+            other => Environment {
+                available: false,
+                entry: Some(selected.to_string_lossy().into()),
+                version: None,
+                error: Some(format!("CodeGraph 版本检测失败：{other:?}")),
+            },
+        };
+    environment.error = environment.error.map(|e| crate::i18n::message(&e));
+    environment
 }
 #[tauri::command]
 pub async fn detect_codegraph(state: State<'_, AppState>) -> Result<Environment> {
@@ -433,7 +444,7 @@ pub async fn get_client_config_status(
         for status in &mut statuses {
             if status.state == "configured" {
                 status.state = "repair".into();
-                status.message = Some("请重启项目实例使固定 HTTP 配置生效".into());
+                status.message = Some(crate::i18n::message("请重启项目实例使固定 HTTP 配置生效"));
             }
         }
     }
@@ -461,7 +472,9 @@ pub async fn test_project_mcp(
     Ok(ProbeResult {
         success: true,
         tools,
-        message: "网关 MCP 初始化及工具列表通过；真实客户端连接需在客户端确认。".into(),
+        message: crate::i18n::message(
+            "网关 MCP 初始化及工具列表通过；真实客户端连接需在客户端确认。",
+        ),
         checked_at: now(),
     })
 }

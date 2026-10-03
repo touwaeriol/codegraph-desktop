@@ -152,6 +152,31 @@ pub fn set_setting(db: &Connection, key: &str, value: &str) -> Result<()> {
     db.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,value])?;
     Ok(())
 }
+pub fn language(db: &Connection) -> Result<String> {
+    let saved = setting(db, "language")?;
+    Ok(crate::i18n::effective(saved.as_deref(), Some(crate::i18n::system_language())).into())
+}
+pub fn save_preferences(
+    db: &mut Connection,
+    index_concurrency: usize,
+    close_behavior: &str,
+    language: Option<&str>,
+) -> Result<()> {
+    if !(1..=4).contains(&index_concurrency) || !["tray", "exit"].contains(&close_behavior) {
+        return Err(AppError::new("INVALID_SETTINGS", "设置值超出允许范围"));
+    }
+    if let Some(language) = language {
+        crate::i18n::validate(language)?;
+    }
+    let tx = db.transaction()?;
+    set_setting(&tx, "indexConcurrency", &index_concurrency.to_string())?;
+    set_setting(&tx, "closeBehavior", close_behavior)?;
+    if let Some(language) = language {
+        set_setting(&tx, "language", language)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {

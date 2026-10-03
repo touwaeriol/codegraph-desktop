@@ -20,6 +20,7 @@ Copy-Item -LiteralPath $app -Destination $otherExe
 $template = Get-Content (Join-Path $workspace 'src-tauri/windows/installer.nsi') -Raw
 $macro = [regex]::Match($template, '(?s)!macro GracefulShutdownForUpdate executablePath.*?!macroend').Value
 if (-not $macro) { throw 'Production graceful-shutdown macro not found.' }
+$localizedStrings = ([regex]::Matches($template,'(?m)^LangString cgShutdown[^\r\n]+') | ForEach-Object Value) -join "`n"
 $includes = Join-Path $workspace 'target/release/nsis/x64'
 $installer = Join-Path $fixture 'update-check.exe'
 $script = @'
@@ -30,6 +31,9 @@ Unicode true
 !include "utils.nsh"
 !addplugindir "@@PLUGINS@@"
 Name "Isolated shutdown regression"
+!insertmacro MUI_LANGUAGE "English"
+!insertmacro MUI_LANGUAGE "SimpChinese"
+@@LOCALIZATION@@
 OutFile "@@OUTFILE@@"
 RequestExecutionLevel user
 Var PassiveMode
@@ -47,10 +51,10 @@ Section
   FileClose $0
 SectionEnd
 '@
-$script = $script.Replace('@@OUTFILE@@',$installer).Replace('@@MACRO@@',$macro).Replace('@@PLUGINS@@',(Join-Path (Split-Path $Makensis) 'Plugins/x86-unicode/additional')).Replace('@@APP@@',$app).Replace('@@CONNECTOR@@',$connector).Replace('@@MARKER@@',(Join-Path $fixture 'payload-written'))
+$script = $script.Replace('@@OUTFILE@@',$installer).Replace('@@MACRO@@',$macro).Replace('@@LOCALIZATION@@',$localizedStrings).Replace('@@PLUGINS@@',(Join-Path (Split-Path $Makensis) 'Plugins/x86-unicode/additional')).Replace('@@APP@@',$app).Replace('@@CONNECTOR@@',$connector).Replace('@@MARKER@@',(Join-Path $fixture 'payload-written'))
 $nsi = Join-Path $fixture 'check.nsi'
 [IO.File]::WriteAllText($nsi,$script)
-& $Makensis '/V2' "/X!addincludedir $includes" $nsi
+& $Makensis '/V2' '/INPUTCHARSET' 'UTF8' "/X!addincludedir $includes" $nsi
 if ($LASTEXITCODE -ne 0) { throw 'Cannot compile production shutdown macro.' }
 $main = Start-Process -FilePath $app -WindowStyle Hidden -PassThru
 $lockedConnector = Start-Process -FilePath $connector -ArgumentList '--worker' -WindowStyle Hidden -PassThru

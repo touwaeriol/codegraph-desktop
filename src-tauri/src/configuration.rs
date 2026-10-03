@@ -489,7 +489,7 @@ fn apply_with(
                 results.push(FileResult {
                     path: prev.path.clone(),
                     status: status.into(),
-                    message: "写入失败后恢复原文件".into(),
+                    message: crate::i18n::message("写入失败后恢复原文件"),
                 });
             }
             results.push(FileResult {
@@ -507,7 +507,7 @@ fn apply_with(
                             "skipped"
                         }
                         .into(),
-                        message: "未修改".into(),
+                        message: crate::i18n::message("未修改"),
                     });
                 }
             }
@@ -543,12 +543,11 @@ fn apply_with(
                     "success"
                 }
                 .into(),
-                message: if f.original.as_deref() == desired(f) {
+                message: crate::i18n::message(if f.original.as_deref() == desired(f) {
                     "内容未变化"
                 } else {
                     "配置已写入"
-                }
-                .into(),
+                }),
             })
             .collect(),
     })
@@ -598,7 +597,9 @@ pub fn status(p: &Project, binding: &HttpBinding) -> Vec<ConfigStatus> {
                 .is_some()
                 {
                     item.state = "repair".into();
-                    item.message = Some("检测到旧连接器配置，请重新预览并应用 HTTP 配置".into());
+                    item.message = Some(crate::i18n::message(
+                        "检测到旧连接器配置，请重新预览并应用 HTTP 配置",
+                    ));
                 }
                 Ok(())
             })();

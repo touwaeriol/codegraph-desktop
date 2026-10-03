@@ -1,3 +1,4 @@
+import { t, useLanguage, setLanguage, type Language } from "@/lib/i18n";
 import {
   useCallback,
   useEffect,
@@ -74,21 +75,22 @@ import type {
 } from "@/lib/types";
 import { ProjectTools } from "./ProjectTools";
 import { Elapsed } from "@/components/Elapsed";
+import packageInfo from "../../package.json";
 
-const stateNames = {
-  stopped: "已停止",
-  starting: "启动中",
-  running: "运行中",
-  stopping: "停止中",
-  error: "运行错误",
-};
-const indexNames = {
-  unknown: "尚未检测",
-  missing: "未初始化",
-  ready: "索引可用",
-  indexing: "索引处理中",
-  error: "索引异常",
-};
+const stateNames = () => ({
+  stopped: t("已停止"),
+  starting: t("启动中"),
+  running: t("运行中"),
+  stopping: t("停止中"),
+  error: t("运行错误"),
+});
+const indexNames = () => ({
+  unknown: t("尚未检测"),
+  missing: t("未初始化"),
+  ready: t("索引可用"),
+  indexing: t("索引处理中"),
+  error: t("索引异常"),
+});
 export function Status({ snapshot }: { snapshot?: RuntimeSnapshot }) {
   return (
     <Badge
@@ -103,7 +105,7 @@ export function Status({ snapshot }: { snapshot?: RuntimeSnapshot }) {
         ) : (
           <Circle size={10} />
         )}{" "}
-        {snapshot ? stateNames[snapshot.state] : "尚未获取"}
+        {snapshot ? stateNames()[snapshot.state] : t("尚未获取")}
       </span>
     </Badge>
   );
@@ -112,12 +114,13 @@ export function ErrorNotice({ error }: { error: string }) {
   return error ? (
     <Alert variant="destructive">
       <TriangleAlert />
-      <AlertTitle>操作未完成</AlertTitle>
+      <AlertTitle>{t("操作未完成")}</AlertTitle>
       <AlertDescription className="break-all">{error}</AlertDescription>
     </Alert>
   ) : null;
 }
 export default function App() {
+  const language = useLanguage();
   const [projects, setProjects] = useState<Project[]>([]),
     [snapshots, setSnapshots] = useState<Record<string, RuntimeSnapshot>>({}),
     [selected, setSelected] = useState(""),
@@ -187,6 +190,7 @@ export default function App() {
       if (request !== refreshRequest.current) return;
       setProjects(items);
       setSettings(prefs);
+      if (prefs.language) setLanguage(prefs.language);
       if (!environmentLoaded.current) {
         environmentLoaded.current = true;
         try {
@@ -302,7 +306,7 @@ export default function App() {
       const path = await open({
         directory: true,
         multiple: false,
-        title: "选择项目目录",
+        title: t("选择项目目录"),
       });
       if (typeof path === "string")
         setForm((f) => ({
@@ -338,7 +342,7 @@ export default function App() {
         await call("remove_project", { projectId: selected });
       setModal(null);
       await refresh();
-      toast.success("项目管理记录已更新");
+      toast.success(t("项目管理记录已更新"));
     } catch (e) {
       setModalError(message(e));
       if (
@@ -356,13 +360,15 @@ export default function App() {
     const perform = async () => {
       await run(
         () => call(`${action}_project`, { projectId: selected }),
-        "操作已提交；以实际状态为准",
+        t("操作已提交；以实际状态为准"),
       );
     };
     if (action !== "start" && (snapshot?.sessions ?? 0) > 0)
       setConfirm({
-        title: action === "stop" ? "停止项目实例" : "重启项目实例",
-        detail: `当前 ${snapshot?.sessions} 个会话将断开，客户端需要重新连接。`,
+        title: action === "stop" ? t("停止项目实例") : t("重启项目实例"),
+        detail: t("当前 {0} 个会话将断开，客户端需要重新连接。", {
+          0: snapshot?.sessions,
+        }),
         action: perform,
       });
     else await perform();
@@ -376,22 +382,23 @@ export default function App() {
         (t) =>
           t.state === "running" && (t.kind === "start" || t.kind === "restart"),
       );
-      if (!task) throw new Error("启动任务状态已变化，请刷新后重试。");
+      if (!task) throw new Error(t("启动任务状态已变化，请刷新后重试。"));
       await call("cancel_task", { operationId: task.operationId });
-    }, "已请求取消启动");
+    }, t("已请求取消启动"));
   }
   async function indexing(kind: "init" | "sync" | "rebuild") {
     const perform = async () => {
       await run(
         () => call("run_index_task", { projectId: selected, kind }),
-        "索引任务已提交",
+        t("索引任务已提交"),
       );
     };
     if (snapshot?.state === "running" || kind === "rebuild")
       setConfirm({
-        title: kind === "rebuild" ? "重建项目索引" : "进入索引维护",
-        detail:
+        title: kind === "rebuild" ? t("重建项目索引") : t("进入索引维护"),
+        detail: t(
           "操作会暂时停止当前实例；完成后恢复原先运行状态。重建不会删除项目源码。",
+        ),
         action: perform,
       });
     else await perform();
@@ -408,7 +415,7 @@ export default function App() {
             action,
             name: p.name,
             ok: true,
-            detail: "操作已提交",
+            detail: t("操作已提交"),
           };
         } catch (e) {
           return {
@@ -434,7 +441,7 @@ export default function App() {
     .sort((a, b) =>
       sort === "recent"
         ? b.updatedAt.localeCompare(a.updatedAt)
-        : a.name.localeCompare(b.name, "zh-CN"),
+        : a.name.localeCompare(b.name, language),
     );
   return (
     <>
@@ -447,14 +454,14 @@ export default function App() {
             <div>
               <div className="font-semibold text-base">CodeGraph</div>
               <div className="text-xs text-muted-foreground mt-1">
-                DESKTOP · 本地项目管理
+                {t("DESKTOP · 本地项目管理")}
               </div>
             </div>
           </div>
           <div className="px-4">
             <Button className="w-full" onClick={() => showModal("add")}>
               <Plus />
-              添加项目
+              {t("添加项目")}
             </Button>
             <div className="relative mt-4">
               <Search
@@ -463,16 +470,18 @@ export default function App() {
               />
               <Input
                 ref={searchRef}
-                aria-label="搜索项目"
+                aria-label={t("搜索项目")}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="搜索项目…"
+                placeholder={t("搜索项目…")}
                 className="pl-8 bg-white"
               />
             </div>
             <div className="flex items-center justify-between text-xs text-muted-foreground my-4">
               <span>
-                全部 {projects.length} · 运行中{" "}
+                {t("全部")}
+                {projects.length}
+                {t("· 运行中")}{" "}
                 {
                   Object.values(snapshots).filter((s) => s.state === "running")
                     .length
@@ -480,7 +489,11 @@ export default function App() {
               </span>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" aria-label="批量项目操作">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t("批量项目操作")}
+                  >
                     <MoreHorizontal size={16} />
                   </Button>
                 </DropdownMenuTrigger>
@@ -490,19 +503,19 @@ export default function App() {
                       disabled={busy || !projects.length}
                       onClick={() => void batchRuntime("start")}
                     >
-                      启动全部项目
+                      {t("启动全部项目")}
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       disabled={busy || !projects.length}
                       onClick={() =>
                         setConfirm({
-                          title: "停止全部项目",
-                          detail: "全部受管实例及其客户端连接将停止。",
+                          title: t("停止全部项目"),
+                          detail: t("全部受管实例及其客户端连接将停止。"),
                           action: () => batchRuntime("stop"),
                         })
                       }
                     >
-                      停止全部项目
+                      {t("停止全部项目")}
                     </DropdownMenuItem>
                   </DropdownMenuGroup>
                 </DropdownMenuContent>
@@ -510,26 +523,26 @@ export default function App() {
             </div>
             <div className="flex gap-2 mb-2">
               <select
-                aria-label="项目筛选"
+                aria-label={t("项目筛选")}
                 className="text-xs bg-transparent w-1/2"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
               >
-                <option value="all">全部状态</option>
-                <option value="running">仅运行中</option>
+                <option value="all">{t("全部状态")}</option>
+                <option value="running">{t("仅运行中")}</option>
               </select>
               <select
-                aria-label="项目排序"
+                aria-label={t("项目排序")}
                 className="text-xs bg-transparent w-1/2"
                 value={sort}
                 onChange={(e) => setSort(e.target.value)}
               >
-                <option value="name">按名称</option>
-                <option value="recent">最近更新</option>
+                <option value="name">{t("按名称")}</option>
+                <option value="recent">{t("最近更新")}</option>
               </select>
             </div>
           </div>
-          <nav className="project-list" aria-label="项目列表">
+          <nav className="project-list" aria-label={t("项目列表")}>
             {displayed.map((p) => (
               <button
                 key={p.id}
@@ -554,7 +567,7 @@ export default function App() {
             ))}
             {!loading && !displayed.length && (
               <p className="text-xs text-muted-foreground px-3 py-6">
-                {query ? "没有匹配的项目" : "项目会显示在这里"}
+                {query ? t("没有匹配的项目") : t("项目会显示在这里")}
               </p>
             )}
           </nav>
@@ -564,10 +577,10 @@ export default function App() {
                 className={`h-1.5 w-1.5 rounded-full ${environment?.available ? "bg-primary" : "bg-amber-600"}`}
               />
               {environment?.available
-                ? `CodeGraph ${environment.version ?? "已检测"}`
+                ? `CodeGraph ${environment.version ?? t("已检测")}`
                 : desktop
-                  ? "CodeGraph 尚未就绪"
-                  : "桌面环境未连接"}
+                  ? t("CodeGraph 尚未就绪")
+                  : t("桌面环境未连接")}
             </div>
             <Button
               variant="ghost"
@@ -575,7 +588,7 @@ export default function App() {
               onClick={() => showModal("settings")}
             >
               <Settings2 />
-              设置
+              {t("设置")}
               <span className="ml-auto text-xs text-muted-foreground">
                 Ctrl+,
               </span>
@@ -586,7 +599,7 @@ export default function App() {
           {!desktop && (
             <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-7 py-3 text-xs flex items-center gap-2">
               <TriangleAlert size={15} />
-              浏览器预览 · 桌面环境未连接。请启动桌面应用以管理真实项目。
+              {t("浏览器预览 · 桌面环境未连接。请启动桌面应用以管理真实项目。")}
             </div>
           )}
           {project ? (
@@ -594,7 +607,8 @@ export default function App() {
               <header className="project-header">
                 <div className="flex justify-between items-center gap-2 mb-4">
                   <div className="text-xs text-muted-foreground flex items-center gap-2">
-                    项目工作台 <span>/</span> {project.name}
+                    {t("项目工作台")}
+                    <span>/</span> {project.name}
                   </div>
                   <div className="toolbar">
                     <Button
@@ -609,14 +623,14 @@ export default function App() {
                       }
                     >
                       <FolderOpen />
-                      打开目录
+                      {t("打开目录")}
                     </Button>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
                           variant="ghost"
                           size="icon"
-                          aria-label="项目菜单"
+                          aria-label={t("项目菜单")}
                         >
                           <MoreHorizontal />
                         </Button>
@@ -624,18 +638,18 @@ export default function App() {
                       <DropdownMenuContent>
                         <DropdownMenuGroup>
                           <DropdownMenuItem onClick={() => showModal("edit")}>
-                            编辑名称与备注
+                            {t("编辑名称与备注")}
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => showModal("relocate")}
                           >
-                            重新定位项目
+                            {t("重新定位项目")}
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             className="text-destructive"
                             onClick={() => showModal("remove")}
                           >
-                            移除管理记录
+                            {t("移除管理记录")}
                           </DropdownMenuItem>
                         </DropdownMenuGroup>
                       </DropdownMenuContent>
@@ -658,11 +672,11 @@ export default function App() {
                         variant="ghost"
                         size="icon"
                         className="h-6 w-6 shrink-0"
-                        aria-label="复制项目路径"
+                        aria-label={t("复制项目路径")}
                         onClick={() =>
                           void navigator.clipboard
                             .writeText(project.rootPath)
-                            .then(() => toast.success("路径已复制"))
+                            .then(() => toast.success(t("路径已复制")))
                         }
                       >
                         <Copy size={12} />
@@ -678,14 +692,14 @@ export default function App() {
                           onClick={() => void runtime("restart")}
                         >
                           <RefreshCw />
-                          重启
+                          {t("重启")}
                         </Button>
                         <Button
                           disabled={busy}
                           onClick={() => void runtime("stop")}
                         >
                           <Square />
-                          停止实例
+                          {t("停止实例")}
                         </Button>
                       </>
                     ) : snapshot?.state === "starting" ? (
@@ -694,7 +708,7 @@ export default function App() {
                         onClick={() => void cancelStartup()}
                       >
                         <Loader2 className="animate-spin" />
-                        取消启动
+                        {t("取消启动")}
                       </Button>
                     ) : (
                       <Button
@@ -711,10 +725,10 @@ export default function App() {
                       >
                         <Play />
                         {snapshot?.indexState === "missing"
-                          ? "初始化索引"
+                          ? t("初始化索引")
                           : snapshot?.state === "stopping"
-                            ? "停止中"
-                            : "启动实例"}
+                            ? t("停止中")
+                            : t("启动实例")}
                       </Button>
                     )}
                   </div>
@@ -723,11 +737,14 @@ export default function App() {
                   <Status snapshot={snapshot} />
                   <span>
                     {snapshot
-                      ? indexNames[snapshot.indexState]
-                      : "索引尚未获取"}
+                      ? indexNames()[snapshot.indexState]
+                      : t("索引尚未获取")}
                   </span>
-                  <span>{snapshot?.sessions ?? "—"} 个会话</span>
-                  {project.autoStart && <span>应用启动时自动启动</span>}
+                  <span>
+                    {snapshot?.sessions ?? "—"}
+                    {t("个会话")}
+                  </span>
+                  {project.autoStart && <span>{t("应用启动时自动启动")}</span>}
                 </div>
               </header>
               <div className="content space-y-4">
@@ -738,26 +755,26 @@ export default function App() {
                       <TriangleAlert />
                       <AlertTitle>
                         {environment.available
-                          ? "CodeGraph 兼容性提示"
-                          : "未找到可用的 CodeGraph"}
+                          ? t("CodeGraph 兼容性提示")
+                          : t("未找到可用的 CodeGraph")}
                       </AlertTitle>
                       <AlertDescription>
                         {environment.error ??
-                          "请在设置中选择安装入口，再进行索引与实例操作。"}
+                          t("请在设置中选择安装入口，再进行索引与实例操作。")}
                         <Button
                           variant="link"
                           onClick={() => showModal("settings")}
                         >
-                          配置运行环境
+                          {t("配置运行环境")}
                         </Button>
                       </AlertDescription>
                     </Alert>
                   )}
                 <Tabs value={tab} onValueChange={changeTab}>
                   <TabsList className="mb-5">
-                    <TabsTrigger value="overview">概览</TabsTrigger>
-                    <TabsTrigger value="config">MCP 配置</TabsTrigger>
-                    <TabsTrigger value="logs">运行日志</TabsTrigger>
+                    <TabsTrigger value="overview">{t("概览")}</TabsTrigger>
+                    <TabsTrigger value="config">{t("MCP 配置")}</TabsTrigger>
+                    <TabsTrigger value="logs">{t("运行日志")}</TabsTrigger>
                   </TabsList>
                   <TabsContent value="overview">
                     <div className="panel-grid">
@@ -766,16 +783,16 @@ export default function App() {
                           <div>
                             <CardTitle className="flex items-center gap-2">
                               <Activity size={17} />
-                              实例
+                              {t("实例")}
                             </CardTitle>
                             <CardDescription className="mt-2">
-                              当前项目独立的进程与网关
+                              {t("当前项目独立的进程与网关")}
                             </CardDescription>
                           </div>
                           <Button
                             variant="ghost"
                             size="icon"
-                            aria-label="刷新状态"
+                            aria-label={t("刷新状态")}
                             disabled={busy}
                             onClick={() =>
                               void run(() =>
@@ -791,45 +808,47 @@ export default function App() {
                         <CardContent>
                           <div className="metrics">
                             <Metric
-                              name="运行状态"
+                              name={t("运行状态")}
                               value={
                                 snapshot
-                                  ? stateNames[snapshot.state]
-                                  : "尚未获取"
+                                  ? stateNames()[snapshot.state]
+                                  : t("尚未获取")
                               }
                             />
                             <Metric
-                              name="本机端口"
-                              value={snapshot?.port ?? "尚未获取固定端口"}
+                              name={t("本机端口")}
+                              value={snapshot?.port ?? t("尚未获取固定端口")}
                             />
                             <Metric
-                              name="进程 PID"
+                              name={t("进程 PID")}
                               value={snapshot?.pid ?? "—"}
                             />
                             <Metric
-                              name="最近启动"
+                              name={t("最近启动")}
                               value={
                                 snapshot?.startedAt
                                   ? new Date(snapshot.startedAt).toLocaleString(
-                                      "zh-CN",
+                                      language,
                                     )
                                   : "—"
                               }
                             />
                             <Metric
-                              name="客户端会话"
-                              value={snapshot?.sessions ?? "尚未获取"}
+                              name={t("客户端会话")}
+                              value={snapshot?.sessions ?? t("尚未获取")}
                             />
                             {snapshot?.startedAt &&
                               snapshot.state === "running" && (
                                 <div>
-                                  <div className="metric-label">运行时长</div>
+                                  <div className="metric-label">
+                                    {t("运行时长")}
+                                  </div>
                                   <Elapsed since={snapshot.startedAt} />
                                 </div>
                               )}
                             <Metric
-                              name="入口版本"
-                              value={environment?.version ?? "尚未获取"}
+                              name={t("入口版本")}
+                              value={environment?.version ?? t("尚未获取")}
                             />
                           </div>
                         </CardContent>
@@ -838,51 +857,53 @@ export default function App() {
                         <CardHeader>
                           <CardTitle className="flex items-center gap-2">
                             <GitBranch size={17} />
-                            代码索引
+                            {t("代码索引")}
                           </CardTitle>
                           <CardDescription>
-                            统计与可用性以 CodeGraph 的实际结果为准
+                            {t("统计与可用性以 CodeGraph 的实际结果为准")}
                           </CardDescription>
                         </CardHeader>
                         <CardContent>
                           <div className="metrics">
                             <Metric
-                              name="索引状态"
+                              name={t("索引状态")}
                               value={
                                 snapshot
-                                  ? indexNames[snapshot.indexState]
-                                  : "尚未获取"
+                                  ? indexNames()[snapshot.indexState]
+                                  : t("尚未获取")
                               }
                             />
                             <Metric
-                              name="已索引文件"
+                              name={t("已索引文件")}
                               value={
-                                snapshot?.indexStats?.fileCount ?? "尚未获取"
+                                snapshot?.indexStats?.fileCount ?? t("尚未获取")
                               }
                             />
                             <Metric
-                              name="图谱节点"
+                              name={t("图谱节点")}
                               value={
-                                snapshot?.indexStats?.nodeCount ?? "尚未获取"
+                                snapshot?.indexStats?.nodeCount ?? t("尚未获取")
                               }
                             />
                             <Metric
-                              name="图谱关系"
+                              name={t("图谱关系")}
                               value={
-                                snapshot?.indexStats?.edgeCount ?? "尚未获取"
+                                snapshot?.indexStats?.edgeCount ?? t("尚未获取")
                               }
                             />
                             {snapshot?.indexStats?.checkedAt && (
                               <Metric
-                                name="统计获取时间"
+                                name={t("统计获取时间")}
                                 value={new Date(
                                   snapshot.indexStats.checkedAt,
-                                ).toLocaleString("zh-CN")}
+                                ).toLocaleString(language)}
                               />
                             )}
                           </div>
                           <p className="text-xs text-muted-foreground my-6">
-                            运行期间同步或重建会短暂断开客户端，完成后恢复实例。
+                            {t(
+                              "运行期间同步或重建会短暂断开客户端，完成后恢复实例。",
+                            )}
                           </p>
                           <div className="toolbar">
                             <Button
@@ -898,35 +919,37 @@ export default function App() {
                             >
                               <RefreshCw />
                               {snapshot?.indexState === "missing"
-                                ? "初始化索引"
-                                : "增量同步"}
+                                ? t("初始化索引")
+                                : t("增量同步")}
                             </Button>
                             <Button
                               variant="ghost"
                               disabled={busy || !environment?.available}
                               onClick={() => void indexing("rebuild")}
                             >
-                              重建索引
+                              {t("重建索引")}
                             </Button>
                           </div>
                         </CardContent>
                       </Card>
                       <Card className="col-span-full">
                         <CardHeader>
-                          <CardTitle>客户端接入</CardTitle>
+                          <CardTitle>{t("客户端接入")}</CardTitle>
                           <CardDescription>
-                            Codex 与 Claude Code 共用当前项目的一个实例
+                            {t("Codex 与 Claude Code 共用当前项目的一个实例")}
                           </CardDescription>
                         </CardHeader>
                         <CardContent className="flex justify-between items-center gap-4 flex-wrap">
                           <p className="text-sm text-muted-foreground">
-                            配置写入、独立连接测试与真实客户端会话分别验证。
+                            {t(
+                              "配置写入、独立连接测试与真实客户端会话分别验证。",
+                            )}
                           </p>
                           <Button
                             variant="outline"
                             onClick={() => changeTab("config")}
                           >
-                            配置客户端
+                            {t("配置客户端")}
                             <ArrowRight />
                           </Button>
                         </CardContent>
@@ -934,7 +957,7 @@ export default function App() {
                       {project.notes && (
                         <Card className="col-span-full">
                           <CardHeader>
-                            <CardTitle>项目备注</CardTitle>
+                            <CardTitle>{t("项目备注")}</CardTitle>
                           </CardHeader>
                           <CardContent className="whitespace-pre-wrap text-muted-foreground">
                             {project.notes}
@@ -954,10 +977,11 @@ export default function App() {
                 {batch.length > 0 && (
                   <Card>
                     <CardHeader>
-                      <CardTitle>批量操作结果</CardTitle>
+                      <CardTitle>{t("批量操作结果")}</CardTitle>
                       <CardDescription>
-                        {batch.filter((b) => b.ok).length} 项已提交 ·{" "}
-                        {batch.filter((b) => !b.ok).length} 项失败
+                        {batch.filter((b) => b.ok).length}
+                        {t("项已提交 ·")} {batch.filter((b) => !b.ok).length}
+                        {t("项失败")}
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-2">
@@ -966,7 +990,7 @@ export default function App() {
                           key={b.projectId}
                           className={`text-sm ${b.ok ? "" : "text-destructive"}`}
                         >
-                          {b.name} · {b.detail}
+                          {b.name} · {b.ok ? t("操作已提交") : b.detail}
                           {!b.ok && (
                             <Button
                               variant="link"
@@ -983,7 +1007,7 @@ export default function App() {
                                         ? {
                                             ...item,
                                             ok: true,
-                                            detail: "重试已提交",
+                                            detail: t("重试已提交"),
                                           }
                                         : item,
                                     ),
@@ -991,7 +1015,7 @@ export default function App() {
                                 })
                               }
                             >
-                              重试此项目
+                              {t("重试此项目")}
                             </Button>
                           )}
                         </div>
@@ -1007,7 +1031,9 @@ export default function App() {
               {loading ? (
                 <div className="empty-hero">
                   <Loader2 className="animate-spin text-primary" />
-                  <p className="mt-4 text-muted-foreground">正在读取项目…</p>
+                  <p className="mt-4 text-muted-foreground">
+                    {t("正在读取项目…")}
+                  </p>
                 </div>
               ) : (
                 <Empty className="empty-hero border-0">
@@ -1019,30 +1045,43 @@ export default function App() {
                       <GitBranch className="size-8" />
                     </EmptyMedia>
                     <Badge variant="outline" className="mb-3">
-                      你的代码，井然有序
+                      {t("你的代码，井然有序")}
                     </Badge>
                     <EmptyTitle className="text-2xl">
-                      添加一个项目，开始管理它的 CodeGraph
+                      {t("添加一个项目，开始管理它的 CodeGraph")}
                     </EmptyTitle>
                     <EmptyDescription className="max-w-lg mt-3">
-                      为每个项目维护独立索引与运行实例，让 Codex 和 Claude Code
-                      连接到正确的代码图谱。
+                      {t(
+                        "为每个项目维护独立索引与运行实例，让 Codex 和 Claude Code 连接到正确的代码图谱。",
+                      )}
                     </EmptyDescription>
                   </EmptyHeader>
                   <EmptyContent>
                     <Button onClick={() => showModal("add")}>
                       <FolderOpen />
-                      选择项目目录
+                      {t("选择项目目录")}
                     </Button>
                     <span className="text-xs text-muted-foreground">
-                      或按 Ctrl+N 添加项目
+                      {t("或按 Ctrl+N 添加项目")}
                     </span>
                   </EmptyContent>
                   <div className="steps">
                     {[
-                      ["01", "选择本地项目", "项目与 Git worktree 分别管理"],
-                      ["02", "建立代码索引", "使用本机已安装的 CodeGraph"],
-                      ["03", "接入 AI 客户端", "同一项目，共用一个受管实例"],
+                      [
+                        "01",
+                        t("选择本地项目"),
+                        t("项目与 Git worktree 分别管理"),
+                      ],
+                      [
+                        "02",
+                        t("建立代码索引"),
+                        t("使用本机已安装的 CodeGraph"),
+                      ],
+                      [
+                        "03",
+                        t("接入 AI 客户端"),
+                        t("同一项目，共用一个受管实例"),
+                      ],
                     ].map(([n, t, d]) => (
                       <div key={n}>
                         <span className="mono text-primary text-xs">{n}</span>
@@ -1067,23 +1106,27 @@ export default function App() {
           <DialogHeader>
             <DialogTitle>
               {modal === "add"
-                ? "添加项目"
+                ? t("添加项目")
                 : modal === "edit"
-                  ? "编辑项目"
+                  ? t("编辑项目")
                   : modal === "relocate"
-                    ? "重新定位项目"
+                    ? t("重新定位项目")
                     : modal === "remove"
-                      ? "移除管理记录"
-                      : "设置"}
+                      ? t("移除管理记录")
+                      : t("设置")}
             </DialogTitle>
             <DialogDescription>
               {modal === "settings"
-                ? "管理本机运行环境与应用偏好"
+                ? t("管理本机运行环境与应用偏好")
                 : modal === "remove"
-                  ? "运行中的实例将先停止。项目源码、索引与客户端配置会保留。"
+                  ? t(
+                      "运行中的实例将先停止。项目源码、索引与客户端配置会保留。",
+                    )
                   : modal === "relocate"
-                    ? "项目 ID 保持不变。先停止当前实例，再检测新目录；客户端配置需重新预览。"
-                    : "每个项目拥有独立索引、网关和运行实例。"}
+                    ? t(
+                        "项目 ID 保持不变。先停止当前实例，再检测新目录；客户端配置需重新预览。",
+                      )
+                    : t("每个项目拥有独立索引、网关和运行实例。")}
             </DialogDescription>
           </DialogHeader>
           <ErrorNotice error={modalError} />
@@ -1097,29 +1140,36 @@ export default function App() {
                 setModal(null);
               }}
             >
-              定位已有项目
+              {t("定位已有项目")}
             </Button>
           )}
           {modal === "settings" ? (
-            <SettingsForm
-              settings={settings}
-              environment={environment}
-              busy={busy}
-              save={async (action) => {
-                setBusy(true);
-                setModalError("");
-                try {
-                  await action();
-                  environmentLoaded.current = false;
-                  await refresh();
-                  toast.success("设置已更新");
-                } catch (e) {
-                  setModalError(message(e));
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            />
+            desktop && !settings ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                {t("正在读取设置…")}
+              </p>
+            ) : (
+              <SettingsForm
+                settings={settings}
+                environment={environment}
+                busy={busy}
+                save={async (action) => {
+                  setBusy(true);
+                  setModalError("");
+                  try {
+                    await action();
+                    setError("");
+                    environmentLoaded.current = false;
+                    await refresh();
+                    toast.success(t("设置已更新"));
+                  } catch (e) {
+                    setModalError(message(e));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              />
+            )
           ) : modal !== "remove" ? (
             <form
               id="project-form"
@@ -1131,7 +1181,9 @@ export default function App() {
               <FieldGroup>
                 {modal !== "edit" && (
                   <Field>
-                    <FieldLabel htmlFor="project-path">项目目录</FieldLabel>
+                    <FieldLabel htmlFor="project-path">
+                      {t("项目目录")}
+                    </FieldLabel>
                     <Input
                       id="project-path"
                       value={form.path}
@@ -1139,7 +1191,7 @@ export default function App() {
                         setForm({ ...form, path: e.target.value })
                       }
                       required
-                      placeholder="输入完整目录路径"
+                      placeholder={t("输入完整目录路径")}
                     />
                     <Button
                       type="button"
@@ -1148,14 +1200,16 @@ export default function App() {
                       onClick={() => void chooseDirectory()}
                     >
                       <FolderOpen />
-                      选择目录
+                      {t("选择目录")}
                     </Button>
                   </Field>
                 )}
                 {modal !== "relocate" && (
                   <>
                     <Field>
-                      <FieldLabel htmlFor="project-name">显示名称</FieldLabel>
+                      <FieldLabel htmlFor="project-name">
+                        {t("显示名称")}
+                      </FieldLabel>
                       <Input
                         id="project-name"
                         value={form.name}
@@ -1168,7 +1222,7 @@ export default function App() {
                     </Field>
                     <Field>
                       <FieldLabel htmlFor="project-notes">
-                        备注（可选）
+                        {t("备注（可选）")}
                       </FieldLabel>
                       <Textarea
                         id="project-notes"
@@ -1188,7 +1242,7 @@ export default function App() {
                         }
                       />
                       <FieldLabel htmlFor="project-auto">
-                        应用启动时自动启动此项目
+                        {t("应用启动时自动启动此项目")}
                       </FieldLabel>
                     </Field>
                   </>
@@ -1210,7 +1264,7 @@ export default function App() {
               disabled={busy}
               onClick={() => setModal(null)}
             >
-              {modal === "settings" ? "完成" : "取消"}
+              {modal === "settings" ? t("完成") : t("取消")}
             </Button>
             {modal !== "settings" && (
               <Button
@@ -1224,10 +1278,10 @@ export default function App() {
               >
                 {busy ? <Loader2 className="animate-spin" /> : null}
                 {modal === "remove"
-                  ? "移除管理记录"
+                  ? t("移除管理记录")
                   : modal === "add"
-                    ? "添加项目"
-                    : "保存"}
+                    ? t("添加项目")
+                    : t("保存")}
               </Button>
             )}
           </DialogFooter>
@@ -1250,7 +1304,7 @@ export default function App() {
               disabled={busy}
               onClick={() => setConfirm(null)}
             >
-              取消
+              {t("取消")}
             </Button>
             <Button
               disabled={busy}
@@ -1260,7 +1314,7 @@ export default function App() {
                 void action?.();
               }}
             >
-              继续
+              {t("继续")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1288,18 +1342,37 @@ function SettingsForm({
   busy: boolean;
   save: (action: () => Promise<unknown>) => Promise<void>;
 }) {
+  const language = useLanguage();
+  const [selectedLanguage, setSelectedLanguage] = useState<Language>(
+    settings?.language ?? language,
+  );
   const [entry, setEntry] = useState(settings?.codegraphEntry ?? ""),
     [concurrency, setConcurrency] = useState(settings?.indexConcurrency ?? 2),
     [behavior, setBehavior] = useState(settings?.closeBehavior ?? "tray");
   return (
     <FieldGroup>
       <Field>
-        <FieldLabel htmlFor="entry">CodeGraph 入口</FieldLabel>
+        <FieldLabel htmlFor="language">{t("界面语言")}</FieldLabel>
+        <select
+          id="language"
+          className="border rounded-md p-2"
+          value={selectedLanguage}
+          onChange={(e) => setSelectedLanguage(e.target.value as Language)}
+        >
+          <option value="zh-CN">简体中文</option>
+          <option value="en">English</option>
+        </select>
+        <p className="text-xs text-muted-foreground">
+          {t("首次启动使用系统语言；手动选择会保存。")}
+        </p>
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="entry">{t("CodeGraph 入口")}</FieldLabel>
         <Input
           id="entry"
           value={entry}
           onChange={(e) => setEntry(e.target.value)}
-          placeholder="自动检测或选择可执行入口"
+          placeholder={t("自动检测或选择可执行入口")}
         />
         <div className="toolbar">
           <Button
@@ -1311,7 +1384,7 @@ function SettingsForm({
               })
             }
           >
-            选择文件
+            {t("选择文件")}
           </Button>
           <Button
             variant="outline"
@@ -1324,25 +1397,25 @@ function SettingsForm({
               )
             }
           >
-            检测并使用
+            {t("检测并使用")}
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
           {environment?.available
-            ? `已检测：${environment.version ?? "版本未提供"}`
-            : (environment?.error ?? "尚未检测")}
-          。更换入口后，运行实例需重启生效。
+            ? t("已检测：{0}", { 0: environment.version ?? t("版本未提供") })
+            : (environment?.error ?? t("尚未检测"))}
+          {t("。更换入口后，运行实例需重启生效。")}
         </p>
         {environment?.available && environment.error && (
           <Alert>
             <TriangleAlert />
-            <AlertTitle>兼容性提示</AlertTitle>
+            <AlertTitle>{t("兼容性提示")}</AlertTitle>
             <AlertDescription>{environment.error}</AlertDescription>
           </Alert>
         )}
       </Field>
       <Field>
-        <FieldLabel htmlFor="concurrency">索引任务并发数</FieldLabel>
+        <FieldLabel htmlFor="concurrency">{t("索引任务并发数")}</FieldLabel>
         <Input
           id="concurrency"
           type="number"
@@ -1353,15 +1426,15 @@ function SettingsForm({
         />
       </Field>
       <Field>
-        <FieldLabel htmlFor="close-behavior">关闭窗口行为</FieldLabel>
+        <FieldLabel htmlFor="close-behavior">{t("关闭窗口行为")}</FieldLabel>
         <select
           className="border rounded-md p-2"
           id="close-behavior"
           value={behavior}
           onChange={(e) => setBehavior(e.target.value as "tray" | "exit")}
         >
-          <option value="tray">隐藏到托盘</option>
-          <option value="exit">退出并停止全部实例</option>
+          <option value="tray">{t("隐藏到托盘")}</option>
+          <option value="exit">{t("退出并停止全部实例")}</option>
         </select>
       </Field>
       <Button
@@ -1371,29 +1444,30 @@ function SettingsForm({
             call("save_settings", {
               indexConcurrency: concurrency,
               closeBehavior: behavior,
+              language: selectedLanguage,
             }),
           )
         }
       >
-        保存偏好
+        {t("保存偏好")}
       </Button>
       <Field>
-        <FieldLabel>应用数据目录</FieldLabel>
+        <FieldLabel>{t("应用数据目录")}</FieldLabel>
         <p className="mono text-xs break-all text-muted-foreground">
-          {settings?.appDataDir ?? "桌面启动后可用"}
+          {settings?.appDataDir ?? t("桌面启动后可用")}
         </p>
         <Button
           variant="outline"
           disabled={!desktop}
           onClick={() => void save(() => call("open_app_data_directory"))}
         >
-          打开数据目录
+          {t("打开数据目录")}
         </Button>
       </Field>
       <p className="text-xs text-muted-foreground">
-        CodeGraph Desktop 0.1.5 · 开发构建
+        {t("CodeGraph Desktop {0} · 开发构建", { 0: packageInfo.version })}
         <br />
-        完全退出应用会停止受管实例。
+        {t("完全退出应用会停止受管实例。")}
       </p>
       <a
         className="text-primary text-sm underline"
@@ -1401,7 +1475,7 @@ function SettingsForm({
         target="_blank"
         rel="noreferrer"
       >
-        CodeGraph 官方项目与安装说明 ↗
+        {t("CodeGraph 官方项目与安装说明 ↗")}
       </a>
     </FieldGroup>
   );

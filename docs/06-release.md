@@ -7,7 +7,7 @@
 1. 同步 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`Cargo.lock` 以及界面中的版本号。
 2. 运行 `node scripts/build-desktop.mjs Check`，提交修改并推送 `main`。
 3. 可先在 Actions 手动运行工作流，验证五个平台检查与打包；手动运行只上传构建产物，不发布 Release。
-4. 创建与版本一致的标签，例如 `git tag -a v0.1.5 -m "Release v0.1.5"`，再运行 `git push origin v0.1.5`。
+4. 创建与版本一致的标签，例如 `git tag -a v0.1.6 -m "Release v0.1.6"`，再运行 `git push origin v0.1.6`。
 5. Actions 在五种原生环境中检查并打包；任何平台失败都不会发布完整 Release。全部成功后，独立发布任务校验各平台产物与 SHA256，并创建或完成该标签对应的 Release。
 
 构建矩阵：Windows AMD64/ARM64、macOS ARM64、Linux AMD64/ARM64。主分支和 PR 执行检查；`v*` 标签执行打包与发布。工作流只在最终发布任务授予 `contents: write`，通过 GitHub 自动提供的 `GITHUB_TOKEN` 发布，无需把个人访问令牌放进仓库。

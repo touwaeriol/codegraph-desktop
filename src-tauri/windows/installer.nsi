@@ -76,6 +76,26 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
+; Current user's Windows display language wins over an old installer preference.
+; PRIMARYLANGID == LANG_CHINESE includes zh-CN, zh-TW, zh-HK, zh-SG and zh-MO.
+!macro MapInstallerLanguage uiLanguage
+  Push $0
+  IntOp $0 ${uiLanguage} & 0x03FF
+  StrCpy $LANGUAGE ${LANG_ENGLISH}
+  ${If} $0 = 0x04
+    StrCpy $LANGUAGE ${LANG_SIMPCHINESE}
+  ${EndIf}
+  Pop $0
+!macroend
+!macro DetectSystemInstallerLanguage
+  Push $9
+  System::Call 'kernel32::GetUserDefaultUILanguage() i.r9'
+  ${If} $9 = 0
+    System::Call 'kernel32::GetSystemDefaultUILanguage() i.r9'
+  ${EndIf}
+  !insertmacro MapInstallerLanguage $9
+  Pop $9
+!macroend
 ; Request orderly shutdown first. RM resources match the exact installation path,
 ; so same-name executables from another installation are never targeted.
 !macro GracefulShutdownForUpdate executablePath
@@ -83,18 +103,18 @@ Var OldMainBinaryName
   IfFileExists "${executablePath}" 0 graceful_done_${ShutdownID}
   !insertmacro RestartManager_StartSession $R7
   ${If} $R7 == ""
-    Abort "Cannot verify the running application before updating."
+    Abort "$(cgShutdownVerifyFailed)"
   ${EndIf}
   !insertmacro RestartManager_RegisterFile $R7 "${executablePath}"
   ${If} $0 != 0
     !insertmacro RestartManager_EndSession $R7
-    Abort "Cannot register the installed application for update."
+    Abort "$(cgShutdownRegisterFailed)"
   ${EndIf}
   StrCpy $1 0
   StrCpy $2 0
   System::Call 'RSTRTMGR::RmGetList(i R7, *i .r1, *i .r2, p 0, *i .r3) i .r0'
   ${If} $0 = ${ERROR_MORE_DATA}
-    DetailPrint "Stopping managed CodeGraph services before closing the application..."
+    DetailPrint "$(cgShutdownStopping)"
     Exec '$\"${executablePath}$\" --shutdown-for-update'
     StrCpy $R8 0
     graceful_wait_${ShutdownID}:
@@ -107,16 +127,16 @@ Var OldMainBinaryName
       ${EndIf}
       ${If} $0 != ${ERROR_MORE_DATA}
         !insertmacro RestartManager_EndSession $R7
-        Abort "Cannot confirm application shutdown; no files were changed."
+        Abort "$(cgShutdownConfirmFailed)"
       ${EndIf}
       IntOp $R8 $R8 + 1
       ${If} $R8 < 80
         Goto graceful_wait_${ShutdownID}
       ${EndIf}
-      DetailPrint "Graceful shutdown timed out; checking only the installed executable with Restart Manager."
+      DetailPrint "$(cgShutdownTimedOut)"
   ${ElseIf} $0 != 0
     !insertmacro RestartManager_EndSession $R7
-    Abort "Cannot inspect the installed application; no files were changed."
+    Abort "$(cgShutdownInspectFailed)"
   ${EndIf}
   graceful_checked_${ShutdownID}:
   !insertmacro RestartManager_EndSession $R7
@@ -207,10 +227,7 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
   !define MUI_UNICON "${UNINSTALLERICON}"
 !endif
 
-; Define registry key to store installer language
-!define MUI_LANGDLL_REGISTRY_ROOT "HKCU"
-!define MUI_LANGDLL_REGISTRY_KEY "${MANUPRODUCTKEY}"
-!define MUI_LANGDLL_REGISTRY_VALUENAME "Installer Language"
+; Installer language is derived from the current OS UI language, never registry history.
 
 ; Installer pages, must be ordered as they appear
 ; 1. Welcome Page
@@ -322,6 +339,19 @@ FunctionEnd
   !include "{{this}}"
 {{/each}}
 
+
+LangString cgShutdownVerifyFailed ${LANG_ENGLISH} "Cannot verify the running application before updating."
+LangString cgShutdownVerifyFailed ${LANG_SIMPCHINESE} "无法核实运行中的应用，更新已停止。"
+LangString cgShutdownRegisterFailed ${LANG_ENGLISH} "Cannot register the installed application for update."
+LangString cgShutdownRegisterFailed ${LANG_SIMPCHINESE} "无法登记待更新的应用，更新已停止。"
+LangString cgShutdownStopping ${LANG_ENGLISH} "Stopping managed CodeGraph services before closing the application..."
+LangString cgShutdownStopping ${LANG_SIMPCHINESE} "正在停止受管 CodeGraph 服务，随后退出应用……"
+LangString cgShutdownConfirmFailed ${LANG_ENGLISH} "Cannot confirm application shutdown; no files were changed."
+LangString cgShutdownConfirmFailed ${LANG_SIMPCHINESE} "无法确认应用已退出，未修改任何文件。"
+LangString cgShutdownTimedOut ${LANG_ENGLISH} "Graceful shutdown timed out; checking only the installed executable with Restart Manager."
+LangString cgShutdownTimedOut ${LANG_SIMPCHINESE} "正常退出超时，将通过系统重启管理器处理当前安装目录中的应用。"
+LangString cgShutdownInspectFailed ${LANG_ENGLISH} "Cannot inspect the installed application; no files were changed."
+LangString cgShutdownInspectFailed ${LANG_SIMPCHINESE} "无法检查已安装的应用，未修改任何文件。"
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode
   ${IfNot} ${Errors}
@@ -338,9 +368,7 @@ Function .onInit
     StrCpy $UpdateMode 1
   ${EndIf}
 
-  !if "${DISPLAYLANGUAGESELECTOR}" == "true"
-    !insertmacro MUI_LANGDLL_DISPLAY
-  !endif
+  !insertmacro DetectSystemInstallerLanguage
 
   !insertmacro SetContext
 
@@ -633,7 +661,7 @@ Function un.onInit
     !insertmacro MULTIUSER_UNINIT
   !endif
 
-  !insertmacro MUI_UNGETLANGUAGE
+  !insertmacro DetectSystemInstallerLanguage
 
   ${GetOptions} $CMDLINE "/P" $PassiveMode
   ${IfNot} ${Errors}

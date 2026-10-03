@@ -1,3 +1,4 @@
+import { t, useLanguage } from "@/lib/i18n";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -53,6 +54,21 @@ type PreviewSource =
   | { kind: "restore"; operationId: string }
   | { kind: "previous"; root: string };
 type FileDraft = { mode: "merge" | "overwrite" | "edit"; content?: string };
+function statusLabel(value: string) {
+  const labels: Record<string, string> = {
+    success: t("成功"),
+    unchanged: t("未修改"),
+    failed: t("失败"),
+    rolledBack: t("已回滚"),
+    rollbackFailed: t("回滚失败"),
+    skipped: t("已跳过"),
+    pending: t("待完成"),
+    partial: t("部分完成"),
+    completed: t("已完成"),
+    interrupted: t("已中断"),
+  };
+  return labels[value] ?? value;
+}
 
 export function ProjectTools({
   project,
@@ -65,6 +81,11 @@ export function ProjectTools({
   tab: string;
   refresh: () => Promise<void>;
 }) {
+  const language = useLanguage();
+  useEffect(() => {
+    setError("");
+    setProbe(null);
+  }, [language]);
   const [clients, setClients] = useState<Client[]>(["codex", "claude"]),
     [statuses, setStatuses] = useState<ConfigStatus[]>([]),
     [preview, setPreview] = useState<ConfigPreview | null>(null),
@@ -117,6 +138,8 @@ export function ProjectTools({
   );
   const virtualizer = useVirtualizer({
     count: filtered.length,
+    enabled: tab === "logs",
+    initialRect: { width: 800, height: 440 },
     getScrollElement: () => scroller.current,
     estimateSize: () => 30,
     overscan: 12,
@@ -162,13 +185,15 @@ export function ProjectTools({
             setStatuses(configs);
             setBackups(savedBackups);
             setTasks((old) => {
-              const merged = new Map(old.map((t) => [t.operationId, t]));
-              currentTasks.forEach((t) => {
+              const merged = new Map(
+                old.map((task) => [task.operationId, task]),
+              );
+              currentTasks.forEach((task) => {
                 if (
-                  !merged.has(t.operationId) ||
-                  merged.get(t.operationId)!.sequence < t.sequence
+                  !merged.has(task.operationId) ||
+                  merged.get(task.operationId)!.sequence <= task.sequence
                 )
-                  merged.set(t.operationId, t);
+                  merged.set(task.operationId, task);
               });
               return [...merged.values()].slice(-20);
             });
@@ -185,10 +210,12 @@ export function ProjectTools({
       subscribe<TaskProgress>("task-progress", (task) => {
         if (task.projectId !== project.id) return;
         setTasks((old) => {
-          const existing = old.find((t) => t.operationId === task.operationId);
+          const existing = old.find(
+            (task) => task.operationId === task.operationId,
+          );
           if (existing && existing.sequence > task.sequence) return old;
           return [
-            ...old.filter((t) => t.operationId !== task.operationId),
+            ...old.filter((task) => task.operationId !== task.operationId),
             task,
           ].slice(-20);
         });
@@ -205,7 +232,7 @@ export function ProjectTools({
       active = false;
       cleanups.forEach((fn) => fn());
     };
-  }, [project.id, refresh]);
+  }, [project.id, refresh, language]);
   useEffect(() => {
     if (follow && tab === "logs" && filtered.length)
       virtualizer.scrollToIndex(filtered.length - 1, { align: "end" });
@@ -297,7 +324,7 @@ export function ProjectTools({
       const data = await requestPreview(previewSource, drafts);
       setPreview(data);
       setPreviewDirty(false);
-      toast.success("已根据磁盘最新文件重新预览，编辑草稿已保留");
+      toast.success(t("已根据磁盘最新文件重新预览，编辑草稿已保留"));
     });
   }
   function changeDraft(client: string, draft: FileDraft) {
@@ -307,20 +334,21 @@ export function ProjectTools({
   return (
     <>
       {tasks
-        .filter((t) => t.state === "running")
-        .map((t) => (
-          <Alert key={t.operationId} className="mb-4">
+        .filter((task) => task.state === "running")
+        .map((task) => (
+          <Alert key={task.operationId} className="mb-4">
             <Loader2 className="animate-spin" />
-            <AlertTitle>索引 / 实例任务进行中</AlertTitle>
+            <AlertTitle>{t("索引 / 实例任务进行中")}</AlertTitle>
             <AlertDescription>
               <div className="flex justify-between items-center gap-3">
                 <span>
-                  {t.message} ·{" "}
-                  {new Date(t.timestamp).toLocaleTimeString("zh-CN")}
-                  {t.startedAt && (
+                  {task.message} ·{" "}
+                  {new Date(task.timestamp).toLocaleTimeString(language)}
+                  {task.startedAt && (
                     <>
                       {" "}
-                      · 已耗时 <Elapsed since={t.startedAt} />
+                      {t("· 已耗时")}
+                      <Elapsed since={task.startedAt} />
                     </>
                   )}
                 </span>
@@ -330,42 +358,48 @@ export function ProjectTools({
                   disabled={busy}
                   onClick={() =>
                     void execute(async () => {
-                      await call("cancel_task", { operationId: t.operationId });
-                      toast("取消请求已发送");
+                      await call("cancel_task", {
+                        operationId: task.operationId,
+                      });
+                      toast(t("取消请求已发送"));
                     })
                   }
                 >
-                  取消任务
+                  {t("取消任务")}
                 </Button>
               </div>
             </AlertDescription>
           </Alert>
         ))}
       {tasks
-        .filter((t) => t.state === "failed")
+        .filter((task) => task.state === "failed")
         .slice(-1)
-        .map((t) => (
-          <Alert key={t.operationId} variant="destructive">
+        .map((task) => (
+          <Alert key={task.operationId} variant="destructive">
             <TriangleAlert />
-            <AlertTitle>任务失败</AlertTitle>
-            <AlertDescription>{t.error?.message ?? t.message}</AlertDescription>
+            <AlertTitle>{t("任务失败")}</AlertTitle>
+            <AlertDescription>
+              {task.error?.message ?? task.message}
+            </AlertDescription>
           </Alert>
         ))}
       {error && (
         <Alert variant="destructive" className="mb-4">
           <TriangleAlert />
-          <AlertTitle>操作未完成</AlertTitle>
+          <AlertTitle>{t("操作未完成")}</AlertTitle>
           <AlertDescription className="break-all">{error}</AlertDescription>
         </Alert>
       )}
       {previewRecovery && !preview && (
         <Alert className="mb-4">
           <TriangleAlert />
-          <AlertTitle>合并预览未能生成</AlertTitle>
+          <AlertTitle>{t("合并预览未能生成")}</AlertTitle>
           <AlertDescription>
             <p className="break-all">{previewRecovery.reason}</p>
             <p>
-              可以先生成覆盖预览，再切换为编辑内容进行修复。覆盖候选将删除所选文件中的其他设置，此操作仅预览，不会立即写入。
+              {t(
+                "可以先生成覆盖预览，再切换为编辑内容进行修复。覆盖候选将删除所选文件中的其他设置，此操作仅预览，不会立即写入。",
+              )}
             </p>
             <Button
               className="mt-2"
@@ -373,7 +407,7 @@ export function ProjectTools({
               disabled={busy}
               onClick={() => void recoverPreview()}
             >
-              以覆盖模式预览
+              {t("以覆盖模式预览")}
             </Button>
           </AlertDescription>
         </Alert>
@@ -381,8 +415,8 @@ export function ProjectTools({
       <TabsContent value="overview">
         <Card className="mt-4">
           <CardHeader>
-            <CardTitle>最近活动</CardTitle>
-            <CardDescription>来自当前项目的真实运行日志</CardDescription>
+            <CardTitle>{t("最近活动")}</CardTitle>
+            <CardDescription>{t("来自当前项目的真实运行日志")}</CardDescription>
           </CardHeader>
           <CardContent>
             {logs.length ? (
@@ -395,13 +429,15 @@ export function ProjectTools({
                     className="text-xs flex gap-4 py-2"
                   >
                     <span className="text-muted-foreground shrink-0">
-                      {new Date(entry.timestamp).toLocaleTimeString("zh-CN")}
+                      {new Date(entry.timestamp).toLocaleTimeString(language)}
                     </span>
                     <span className="break-all">{entry.message}</span>
                   </div>
                 ))
             ) : (
-              <p className="text-sm text-muted-foreground">尚无活动记录</p>
+              <p className="text-sm text-muted-foreground">
+                {t("尚无活动记录")}
+              </p>
             )}
           </CardContent>
         </Card>
@@ -409,16 +445,20 @@ export function ProjectTools({
       <TabsContent value="config" className="space-y-4">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-lg font-semibold">MCP 配置</h2>
+            <h2 className="text-lg font-semibold">{t("MCP 配置")}</h2>
             <p className="text-sm text-muted-foreground mt-1">
-              客户端将共用 {project.name} 的受管实例。
+              {t("客户端将共用")}
+              {project.name}
+              {t("的受管实例。")}
             </p>
           </div>
           <div className="toolbar">
             <Button
               variant="outline"
               disabled={busy || snapshot?.state !== "running"}
-              title={snapshot?.state !== "running" ? "需先启动实例" : undefined}
+              title={
+                snapshot?.state !== "running" ? t("需先启动实例") : undefined
+              }
               onClick={() =>
                 void execute(async () =>
                   setProbe(
@@ -428,13 +468,13 @@ export function ProjectTools({
               }
             >
               <ActivityIcon />
-              测试连接
+              {t("测试连接")}
             </Button>
             <Button
               disabled={busy || !clients.length}
               onClick={() => void configPreview("install")}
             >
-              预览并配置
+              {t("预览并配置")}
             </Button>
           </div>
         </div>
@@ -470,12 +510,12 @@ export function ProjectTools({
                 <Badge variant="secondary">
                   {status
                     ? {
-                        missing: "未配置",
-                        configured: "已配置",
-                        repair: "需修复",
-                        parseError: "解析错误",
+                        missing: t("未配置"),
+                        configured: t("已配置"),
+                        repair: t("需修复"),
+                        parseError: t("解析错误"),
                       }[status.state]
-                    : "尚未获取"}
+                    : t("尚未获取")}
                 </Badge>
               </CardHeader>
               <CardContent className="text-xs text-muted-foreground">
@@ -484,41 +524,44 @@ export function ProjectTools({
                     {status.message}
                   </p>
                 )}
-                配置状态不代表实际连接。当前项目总会话：
-                {snapshot?.sessions ?? "尚未获取"}
-                ；尚未获取按客户端分类的会话信息。
+                {t("配置状态不代表实际连接。当前项目总会话：")}
+                {snapshot?.sessions ?? t("尚未获取")}
+                {t("；尚未获取按客户端分类的会话信息。")}
               </CardContent>
             </Card>
           );
         })}
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm">连接路径</CardTitle>
+            <CardTitle className="text-sm">{t("连接路径")}</CardTitle>
             <CardDescription>
-              客户端 HTTP → 当前项目网关 → CodeGraph
+              {t("客户端 HTTP → 当前项目网关 → CodeGraph")}
             </CardDescription>
           </CardHeader>
           <CardContent>
             {snapshot?.state === "running" && snapshot.port && (
               <p className="mono text-xs mb-3 break-all">
-                当前服务地址：http://127.0.0.1:{snapshot.port}/mcp
+                {t("当前服务地址：http://127.0.0.1:")}
+                {snapshot.port}/mcp
               </p>
             )}
             <p className="text-xs text-muted-foreground leading-6">
-              请先在 CodeGraph Desktop
-              启动当前项目；实例停止或桌面应用退出后，HTTP
-              服务不可用。客户端可能要求信任项目或批准
-              MCP；写入后请重新加载客户端。独立测试通过不表示真实客户端已连接。
+              {t(
+                "请先在 CodeGraph Desktop 启动当前项目；实例停止或桌面应用退出后，HTTP 服务不可用。客户端可能要求信任项目或批准 MCP；写入后请重新加载客户端。独立测试通过不表示真实客户端已连接。",
+              )}
             </p>
             <p className="text-xs text-muted-foreground leading-6 mt-2">
-              项目使用固定本机端口，重启后地址保持不变；端口被占用时启动会报错，不会自动切换端口。配置中的地址与鉴权信息属于本机项目，请勿公开分享。
+              {t(
+                "项目使用固定本机端口，重启后地址保持不变；端口被占用时启动会报错，不会自动切换端口。配置中的地址与鉴权信息属于本机项目，请勿公开分享。",
+              )}
             </p>
             <Alert className="mt-4">
               <RefreshCw />
-              <AlertTitle>迁移已有客户端配置</AlertTitle>
+              <AlertTitle>{t("迁移已有客户端配置")}</AlertTitle>
               <AlertDescription>
-                之前生成的配置需要重新点击“预览并配置”，核对后应用，才能迁移为直接
-                HTTP 连接。
+                {t(
+                  "之前生成的配置需要重新点击“预览并配置”，核对后应用，才能迁移为直接 HTTP 连接。",
+                )}
               </AlertDescription>
             </Alert>
             <div className="toolbar mt-4">
@@ -528,7 +571,7 @@ export function ProjectTools({
                 disabled={busy || !clients.length}
                 onClick={() => void configPreview("remove")}
               >
-                预览移除受管配置
+                {t("预览移除受管配置")}
               </Button>
               <Button
                 variant="ghost"
@@ -536,13 +579,15 @@ export function ProjectTools({
                 onClick={() =>
                   void navigator.clipboard
                     .writeText(
-                      "在 CodeGraph Desktop 添加项目，初始化索引并启动实例；在 MCP 配置页预览并应用直接 HTTP 配置，然后在 Codex / Claude Code 信任项目并批准 MCP。已有配置需要重新预览应用以迁移。客户端 HTTP → 当前项目网关 → CodeGraph。项目使用固定本机端口，重启保持地址；端口冲突会报错，不会自动切换。实例停止或桌面应用退出后服务不可用。配置含本机项目鉴权信息，请勿公开分享。",
+                      t(
+                        "在 CodeGraph Desktop 添加项目，初始化索引并启动实例；在 MCP 配置页预览并应用直接 HTTP 配置，然后在 Codex / Claude Code 信任项目并批准 MCP。已有配置需要重新预览应用以迁移。客户端 HTTP → 当前项目网关 → CodeGraph。项目使用固定本机端口，重启保持地址；端口冲突会报错，不会自动切换。实例停止或桌面应用退出后服务不可用。配置含本机项目鉴权信息，请勿公开分享。",
+                      ),
                     )
-                    .then(() => toast.success("接入说明已复制"))
+                    .then(() => toast.success(t("接入说明已复制")))
                 }
               >
                 <Copy />
-                复制接入说明
+                {t("复制接入说明")}
               </Button>
             </div>
           </CardContent>
@@ -551,15 +596,20 @@ export function ProjectTools({
           <Alert variant={probe.success ? "default" : "destructive"}>
             {probe.success ? <CheckCircle2 /> : <TriangleAlert />}
             <AlertTitle>
-              独立 MCP 测试{probe.success ? "通过" : "失败"}
+              {t("独立 MCP 测试")}
+              {probe.success ? t("通过") : t("失败")}
             </AlertTitle>
             <AlertDescription>
               <p>{probe.message}</p>
               <p>
-                测试时间：{new Date(probe.checkedAt).toLocaleString("zh-CN")}
+                {t("测试时间：")}
+                {new Date(probe.checkedAt).toLocaleString(language)}
               </p>
               {probe.tools.length > 0 && (
-                <p className="mono break-all">工具：{probe.tools.join("、")}</p>
+                <p className="mono break-all">
+                  {t("工具：")}
+                  {probe.tools.join(language === "en" ? ", " : "、")}
+                </p>
               )}
             </AlertDescription>
           </Alert>
@@ -567,15 +617,16 @@ export function ProjectTools({
         {result && (
           <Card>
             <CardHeader>
-              <CardTitle>配置操作结果</CardTitle>
+              <CardTitle>{t("配置操作结果")}</CardTitle>
               <CardDescription className="break-all">
-                备份：{result.backupPath}
+                {t("备份：")}
+                {result.backupPath}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {result.files.map((file) => (
                 <div key={file.path} className="text-xs break-all">
-                  <strong>{file.status}</strong> · {file.path}
+                  <strong>{statusLabel(file.status)}</strong> · {file.path}
                   <p className="text-muted-foreground mt-1">{file.message}</p>
                 </div>
               ))}
@@ -589,7 +640,7 @@ export function ProjectTools({
                   })
                 }
               >
-                预览恢复此备份
+                {t("预览恢复此备份")}
               </Button>
             </CardContent>
           </Card>
@@ -597,9 +648,11 @@ export function ProjectTools({
         {(project.previousRoots ?? []).length > 0 && (
           <Card>
             <CardHeader>
-              <CardTitle>旧目录配置清理</CardTitle>
+              <CardTitle>{t("旧目录配置清理")}</CardTitle>
               <CardDescription>
-                重新定位记录中的旧目录。仅预览并移除本应用受管条目，当前项目配置另行管理。
+                {t(
+                  "重新定位记录中的旧目录。仅预览并移除本应用受管条目，当前项目配置另行管理。",
+                )}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -617,7 +670,7 @@ export function ProjectTools({
                       void beginPreview({ kind: "previous", root })
                     }
                   >
-                    预览清理旧配置
+                    {t("预览清理旧配置")}
                   </Button>
                 </div>
               ))}
@@ -627,9 +680,9 @@ export function ProjectTools({
         {backups.length > 0 && (
           <Card>
             <CardHeader>
-              <CardTitle>配置备份</CardTitle>
+              <CardTitle>{t("配置备份")}</CardTitle>
               <CardDescription>
-                恢复前预览差异；不会覆盖备份之后的手动编辑。
+                {t("恢复前预览差异；不会覆盖备份之后的手动编辑。")}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -641,7 +694,7 @@ export function ProjectTools({
                   <div className="min-w-0 text-xs">
                     <p className="break-all mono">{backup.operationId}</p>
                     <p className="text-muted-foreground break-all mt-1">
-                      {backup.state} · {backup.backupPath}
+                      {statusLabel(backup.state)} · {backup.backupPath}
                     </p>
                   </div>
                   <Button
@@ -656,7 +709,7 @@ export function ProjectTools({
                       })
                     }
                   >
-                    预览恢复
+                    {t("预览恢复")}
                   </Button>
                 </div>
               ))}
@@ -669,29 +722,31 @@ export function ProjectTools({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Terminal size={17} />
-              运行日志
+              {t("运行日志")}
             </CardTitle>
             <CardDescription>
-              仅当前项目 · 视图最多保留 2,000 行 · 清空视图不会删除磁盘日志
+              {t(
+                "仅当前项目 · 视图最多保留 2,000 行 · 清空视图不会删除磁盘日志",
+              )}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="toolbar mb-4">
               <select
-                aria-label="日志等级"
+                aria-label={t("日志等级")}
                 className="border rounded-md p-2"
                 value={level}
                 onChange={(e) => setLevel(e.target.value)}
               >
-                <option value="all">全部等级</option>
-                <option value="info">信息</option>
-                <option value="warn">警告</option>
-                <option value="error">错误</option>
-                <option value="debug">调试</option>
+                <option value="all">{t("全部等级")}</option>
+                <option value="info">{t("信息")}</option>
+                <option value="warn">{t("警告")}</option>
+                <option value="error">{t("错误")}</option>
+                <option value="debug">{t("调试")}</option>
               </select>
               <Input
-                aria-label="搜索日志"
-                placeholder="搜索日志…"
+                aria-label={t("搜索日志")}
+                placeholder={t("搜索日志…")}
                 className="w-48"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -702,7 +757,7 @@ export function ProjectTools({
                 onClick={() => setFollow(!follow)}
               >
                 {follow ? <Pause /> : <Play />}
-                {follow ? "暂停跟随" : "回到最新"}
+                {follow ? t("暂停跟随") : t("回到最新")}
               </Button>
               <Button
                 variant="ghost"
@@ -718,11 +773,11 @@ export function ProjectTools({
                           )
                           .join("\n"),
                     )
-                    .then(() => toast.success("日志已复制"))
+                    .then(() => toast.success(t("日志已复制")))
                 }
               >
                 <Copy />
-                复制
+                {t("复制")}
               </Button>
               <Button
                 variant="ghost"
@@ -733,15 +788,15 @@ export function ProjectTools({
                     const path = await call<string>("export_project_logs", {
                       projectId: project.id,
                     });
-                    toast.success(`日志已导出：${path}`);
+                    toast.success(t("日志已导出：{0}", { 0: path }));
                   })
                 }
               >
                 <Download />
-                导出
+                {t("导出")}
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setLogs([])}>
-                清空视图
+                {t("清空视图")}
               </Button>
             </div>
             <div
@@ -780,7 +835,9 @@ export function ProjectTools({
                         }}
                       >
                         <span className="text-muted-foreground">
-                          {new Date(item.timestamp).toLocaleTimeString("zh-CN")}
+                          {new Date(item.timestamp).toLocaleTimeString(
+                            language,
+                          )}
                         </span>
                         <span
                           className={`w-12 ${item.level === "error" ? "text-destructive" : "text-primary"}`}
@@ -798,8 +855,10 @@ export function ProjectTools({
               ) : (
                 <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
                   {search
-                    ? "没有匹配的日志"
-                    : "尚无日志。启动实例或运行索引后，真实日志将显示在这里。"}
+                    ? t("没有匹配的日志")
+                    : t(
+                        "尚无日志。启动实例或运行索引后，真实日志将显示在这里。",
+                      )}
                 </div>
               )}
             </div>
@@ -815,23 +874,27 @@ export function ProjectTools({
         <DialogContent className="sm:max-w-[920px] max-h-[85vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>
-              {previousRootPreview ? "旧目录配置清理预览" : "配置差异预览"} ·{" "}
-              {project.name}
+              {previousRootPreview
+                ? t("旧目录配置清理预览")
+                : t("配置差异预览")}{" "}
+              · {project.name}
             </DialogTitle>
             <DialogDescription>
-              默认合并会保留其他 MCP
-              与设置；覆盖模式将替换整个文件。所有写入均先备份，并检查文件是否被外部修改。
+              {t(
+                "默认合并会保留其他 MCP 与设置；覆盖模式将替换整个文件。所有写入均先备份，并检查文件是否被外部修改。",
+              )}
             </DialogDescription>
           </DialogHeader>
           {previousRootPreview && (
             <Alert>
               <TriangleAlert />
-              <AlertTitle>将修改旧目录中的受管配置</AlertTitle>
+              <AlertTitle>{t("将修改旧目录中的受管配置")}</AlertTitle>
               <AlertDescription className="break-all">
                 <code>{previousRootPreview}</code>
                 <p>
-                  清理旧目录中的 Codex / Claude Code
-                  条目。请核对下方每个文件路径和删除内容。
+                  {t(
+                    "清理旧目录中的 Codex / Claude Code 条目。请核对下方每个文件路径和删除内容。",
+                  )}
                 </p>
               </AlertDescription>
             </Alert>
@@ -839,18 +902,20 @@ export function ProjectTools({
           {previewRecovery && (
             <Alert>
               <TriangleAlert />
-              <AlertTitle>由合并失败进入修复预览</AlertTitle>
+              <AlertTitle>{t("由合并失败进入修复预览")}</AlertTitle>
               <AlertDescription className="break-all">
                 {previewRecovery.reason}
               </AlertDescription>
             </Alert>
           )}
           <div className="text-xs mono break-all">
-            服务名：{preview?.serviceName}
+            {t("服务名：")}
+            {preview?.serviceName}
           </div>
           <p className="text-xs text-muted-foreground">
-            也可以在外部编辑器修改文件，然后点击“重新读取 /
-            刷新预览”。刷新以磁盘最新内容作对比，保留此处的编辑草稿。
+            {t(
+              "也可以在外部编辑器修改文件，然后点击“重新读取 / 刷新预览”。刷新以磁盘最新内容作对比，保留此处的编辑草稿。",
+            )}
           </p>
           {error && (
             <Alert variant="destructive">
@@ -863,17 +928,17 @@ export function ProjectTools({
                 <strong className="break-all">{file.path}</strong>
                 <Badge variant="outline">
                   {!file.existed
-                    ? "新建文件"
+                    ? t("新建文件")
                     : file.conflict
-                      ? "替换已有项"
-                      : "更新受管配置"}
+                      ? t("替换已有项")
+                      : t("更新受管配置")}
                 </Badge>
               </div>
               {editablePreview && (
                 <div className="space-y-3 mb-3">
                   <Field>
                     <FieldLabel htmlFor={`config-mode-${file.client}`}>
-                      写入方式
+                      {t("写入方式")}
                     </FieldLabel>
                     <select
                       id={`config-mode-${file.client}`}
@@ -890,26 +955,28 @@ export function ProjectTools({
                         });
                       }}
                     >
-                      <option value="merge">合并配置（默认）</option>
-                      <option value="overwrite">覆盖整个文件</option>
-                      <option value="edit">编辑内容</option>
+                      <option value="merge">{t("合并配置（默认）")}</option>
+                      <option value="overwrite">{t("覆盖整个文件")}</option>
+                      <option value="edit">{t("编辑内容")}</option>
                     </select>
                   </Field>
                   {drafts[file.client]?.mode === "overwrite" && (
                     <Alert variant="destructive">
                       <TriangleAlert />
-                      <AlertTitle>覆盖整个文件</AlertTitle>
+                      <AlertTitle>{t("覆盖整个文件")}</AlertTitle>
                       <AlertDescription>
-                        将仅保留本项目的 CodeGraph 配置；此文件中的其他
-                        MCP、模型设置、注释等都会被移除。请重新预览并逐行核对删除内容。
+                        {t(
+                          "将仅保留本项目的 CodeGraph 配置；此文件中的其他 MCP、模型设置、注释等都会被移除。请重新预览并逐行核对删除内容。",
+                        )}
                       </AlertDescription>
                     </Alert>
                   )}
                   {drafts[file.client]?.mode === "edit" && (
                     <Field>
                       <FieldLabel htmlFor={`config-content-${file.client}`}>
-                        完整文件内容（
-                        {file.client === "codex" ? "TOML" : "JSON"}）
+                        {t("完整文件内容（{0}）", {
+                          0: file.client === "codex" ? "TOML" : "JSON",
+                        })}
                       </FieldLabel>
                       <Textarea
                         id={`config-content-${file.client}`}
@@ -925,9 +992,9 @@ export function ProjectTools({
                         }
                       />
                       <p className="text-xs text-muted-foreground">
-                        编辑的是完整文件。重新预览时校验语法；失败会保留草稿。更改或删除
-                        codegraph 的 HTTP URL
-                        或鉴权字段后，可能不再连接当前项目，对应条目也不再登记为本项目受管配置。
+                        {t(
+                          "编辑的是完整文件。重新预览时校验语法；失败会保留草稿。更改或删除 codegraph 的 HTTP URL 或鉴权字段后，可能不再连接当前项目，对应条目也不再登记为本项目受管配置。",
+                        )}
                       </p>
                     </Field>
                   )}
@@ -935,7 +1002,7 @@ export function ProjectTools({
               )}
               {previewDirty && (
                 <p className="text-xs text-amber-800 mb-2">
-                  以下仍为上一次通过校验的差异，请刷新预览后再应用。
+                  {t("以下仍为上一次通过校验的差异，请刷新预览后再应用。")}
                 </p>
               )}
               <LineDiff before={file.before} after={file.after} />
@@ -948,14 +1015,14 @@ export function ProjectTools({
               onClick={() => void refreshPreview()}
             >
               <RefreshCw />
-              重新读取 / 刷新预览
+              {t("重新读取 / 刷新预览")}
             </Button>
             <Button
               variant="outline"
               disabled={busy}
               onClick={() => setPreview(null)}
             >
-              取消
+              {t("取消")}
             </Button>
             <Button
               disabled={busy || previewDirty}
@@ -978,13 +1045,16 @@ export function ProjectTools({
                       ["success", "unchanged"].includes(file.status),
                     )
                   )
-                    toast.success("配置操作已完成");
+                    toast.success(t("配置操作已完成"));
                   else
-                    setError("部分配置未能完成，请查看逐文件结果和备份位置。");
+                    setError(
+                      t("部分配置未能完成，请查看逐文件结果和备份位置。"),
+                    );
                 })
               }
             >
-              {busy && <Loader2 className="animate-spin" />}应用配置
+              {busy && <Loader2 className="animate-spin" />}
+              {t("应用配置")}
             </Button>
           </DialogFooter>
         </DialogContent>
