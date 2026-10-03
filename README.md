@@ -4,7 +4,7 @@
 
 A desktop project manager for CodeGraph, built with **Tauri 2 + React + TypeScript + Vite**.
 
-Each project runs its own CodeGraph instance with a separate index, runtime state, logs, and local service port. Codex and Claude Code connect to the corresponding instance through project-level MCP configuration.
+Each project runs its own CodeGraph instance with a separate index, runtime state, logs, and authentication token. One local HTTP service routes `/mcp/{project-id}` to the corresponding instance. Codex and Claude Code use project-level MCP configuration.
 
 [GitHub repository](https://github.com/touwaeriol/codegraph-desktop) · [Download releases](https://github.com/touwaeriol/codegraph-desktop/releases) · [GitHub Actions](https://github.com/touwaeriol/codegraph-desktop/actions)
 
@@ -39,7 +39,9 @@ The Windows installer automatically uses Simplified Chinese on Chinese-language 
 ## MCP connections and configuration editing
 
 - Project MCP services use the name `codegraph`. Codex and Claude Code connect directly to the local project gateway over Streamable HTTP. The gateway uses CodeGraph's native stdio transport upstream.
-- Each project persistently stores a fixed port and authentication token. Restarting does not change its configuration. An occupied port causes an explicit error instead of silently changing ports. Start the project in the desktop application before connecting a client.
+- The application persists one shared loopback port; each project keeps its own stable ID, authentication token, and MCP sessions. Endpoints use `http://127.0.0.1:<port>/mcp/<project-id>`. An occupied port causes an explicit error instead of silently changing ports. Start the project in the desktop application before connecting a client. Stopping one project leaves the shared service and other projects running.
+- Existing application-managed HTTP configurations are backed up and migrated on startup when their ownership fingerprints still match. Manually modified entries are preserved and can be reviewed through **Preview and configure**. Global client configuration is not changed.
+- **Settings** opens in the main workspace beside the project sidebar. Select a project to return to its workspace.
 - To migrate an older configuration, open **Preview and configure** again and review the change from command/args to a URL and authentication header. The compatibility connector remains bundled, but new configurations do not reference it.
 - For each file in the preview, choose to merge settings, overwrite the entire file, or edit its complete contents. Overwriting removes other settings in that file; review the diff before applying it.
 - After editing, refresh the preview. Syntax validation must pass before applying changes. Refreshing after an external editor changes the file preserves your draft in the preview window.

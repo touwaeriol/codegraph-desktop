@@ -98,7 +98,7 @@ const fs = require("node:fs");
       });
       await button.click();
       await page
-        .getByRole("dialog")
+        .getByTestId("settings-page")
         .getByText("DETECTION_FAILED_FIXTURE", { exact: true })
         .waitFor();
       assert.equal(
@@ -129,7 +129,9 @@ const fs = require("node:fs");
         await page.locator("#entry").inputValue(),
         "C:\\Users\\Fixture\\AppData\\Roaming\\npm\\codegraph.cmd",
       );
-      assert.ok((await page.getByRole("dialog").innerText()).includes("1.6.2"));
+      assert.ok(
+        (await page.getByTestId("settings-page").innerText()).includes("1.6.2"),
+      );
       await page
         .getByText(
           language === "en"
@@ -173,7 +175,7 @@ const fs = require("node:fs");
         ),
         "D:\\custom\\codegraph.cmd",
       );
-      await page.getByRole("dialog").evaluate((el) => (el.scrollTop = 0));
+      await page.locator("main").evaluate((el) => (el.scrollTop = 0));
       await page.screenshot({
         path: `.tools/environment-detection-${language}.png`,
       });

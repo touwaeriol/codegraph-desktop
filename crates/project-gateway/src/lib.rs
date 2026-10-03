@@ -31,6 +31,75 @@ use tokio::{
     sync::{Mutex, Semaphore},
 };
 use tokio_util::sync::CancellationToken;
+use tower::ServiceExt as TowerServiceExt;
+type Routes =
+    Arc<std::sync::RwLock<std::collections::HashMap<String, (Router, CancellationToken)>>>;
+pub struct SharedGateway {
+    port: u16,
+    routes: Routes,
+    cancel: CancellationToken,
+    server: tokio::task::JoinHandle<std::io::Result<()>>,
+}
+async fn dispatch(State(routes): State<Routes>, request: Request) -> Response {
+    use axum::response::IntoResponse;
+    let path = request.uri().path();
+    let id = path
+        .strip_prefix("/mcp/")
+        .or_else(|| path.strip_prefix("/identity/"));
+    let route = id.and_then(|id| routes.read().unwrap().get(id).cloned());
+    match route {
+        Some((router, cancel)) if !cancel.is_cancelled() => {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => StatusCode::NOT_FOUND.into_response(),
+                response = router.oneshot(request) => response.unwrap(),
+            }
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+impl SharedGateway {
+    pub async fn start(port: u16) -> anyhow::Result<Self> {
+        let listener = TcpListener::bind(("127.0.0.1", port))
+            .await
+            .context("PORT_BIND_FAILED: 无法绑定项目端口")?;
+        let port = listener.local_addr()?.port();
+        let routes = Routes::default();
+        let app = Router::new().fallback(dispatch).with_state(routes.clone());
+        let cancel = CancellationToken::new();
+        let shutdown = cancel.clone();
+        let server = tokio::spawn(async move {
+            let result = axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown.clone().cancelled_owned())
+                .await;
+            shutdown.cancel();
+            result
+        });
+        Ok(Self {
+            port,
+            routes,
+            cancel,
+            server,
+        })
+    }
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+    pub async fn stop(mut self) -> anyhow::Result<()> {
+        self.cancel.cancel();
+        self.routes.write().unwrap().clear();
+        self.server.abort();
+        let _ = (&mut self.server).await;
+        Ok(())
+    }
+}
+impl Drop for SharedGateway {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        self.routes.write().unwrap().clear();
+        self.server.abort();
+    }
+}
 pub struct GatewayOptions {
     pub project_id: String,
     pub root: PathBuf,
@@ -49,7 +118,10 @@ pub struct Gateway {
     job: Option<job::ProcessJob>,
     upstream: Option<RunningService<RoleClient, ()>>,
     cancel: CancellationToken,
-    server: tokio::task::JoinHandle<std::io::Result<()>>,
+    server: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
+    registration: Option<(Routes, String)>,
+    endpoint: String,
+    sessions: Arc<LocalSessionManager>,
 }
 #[derive(Clone)]
 struct Auth {
@@ -72,6 +144,23 @@ async fn authorize(
 }
 impl Gateway {
     pub async fn start(options: GatewayOptions) -> anyhow::Result<Self> {
+        Self::start_inner(options, None).await
+    }
+    pub async fn start_shared(
+        options: GatewayOptions,
+        host: &SharedGateway,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(!host.cancel.is_cancelled(), "SHARED_GATEWAY_STOPPED");
+        anyhow::ensure!(
+            options.preferred_port.is_none_or(|p| p == host.port),
+            "INVALID_HTTP_PORT"
+        );
+        Self::start_inner(options, Some(host)).await
+    }
+    async fn start_inner(
+        options: GatewayOptions,
+        host: Option<&SharedGateway>,
+    ) -> anyhow::Result<Self> {
         uuid::Uuid::parse_str(&options.project_id)?;
         if let Some(token) = &options.persistent_token {
             anyhow::ensure!(
@@ -79,24 +168,36 @@ impl Gateway {
                 "INVALID_HTTP_TOKEN: 持久令牌必须为 64 位十六进制字符串"
             );
             anyhow::ensure!(
-                options.preferred_port.is_some_and(|port| port != 0),
+                host.is_some() || options.preferred_port.is_some_and(|port| port != 0),
                 "INVALID_HTTP_PORT: 持久 HTTP 连接必须指定非零端口"
             );
         }
         let root = dunce::canonicalize(&options.root)?;
         anyhow::ensure!(root.join(".codegraph").is_dir(), "INDEX_REQUIRED");
-        let listener = match TcpListener::bind(("127.0.0.1", options.preferred_port.unwrap_or(0)))
-            .await
-        {
-            Ok(l) => l,
-            Err(_) if options.persistent_token.is_none() && options.preferred_port.is_some() => {
-                TcpListener::bind("127.0.0.1:0").await?
-            }
-            Err(e) => {
-                return Err(anyhow::Error::new(e).context("PORT_BIND_FAILED: 无法绑定项目端口"))
-            }
+        let listener = if host.is_some() {
+            None
+        } else {
+            Some(
+                match TcpListener::bind(("127.0.0.1", options.preferred_port.unwrap_or(0))).await {
+                    Ok(l) => l,
+                    Err(_)
+                        if options.persistent_token.is_none()
+                            && options.preferred_port.is_some() =>
+                    {
+                        TcpListener::bind("127.0.0.1:0").await?
+                    }
+                    Err(e) => {
+                        return Err(
+                            anyhow::Error::new(e).context("PORT_BIND_FAILED: 无法绑定项目端口")
+                        )
+                    }
+                },
+            )
         };
-        let port = listener.local_addr()?.port();
+        let port = match host {
+            Some(host) => host.port,
+            None => listener.as_ref().unwrap().local_addr()?.port(),
+        };
         let generation = uuid::Uuid::new_v4().to_string();
         let token = options.persistent_token.unwrap_or_else(|| {
             let mut bytes = [0u8; 32];
@@ -165,24 +266,37 @@ impl Gateway {
             sessions: Default::default(),
             poisoned: Default::default(),
         });
-        let cancel = CancellationToken::new();
+        let cancel = host.map(|h| h.cancel.child_token()).unwrap_or_default();
         let config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default();
         let copy = shared.clone();
+        let factory_cancel = cancel.clone();
+        let sessions = Arc::new(LocalSessionManager::default());
         let service = StreamableHttpService::new(
-            move || Ok(relay::Relay::new(copy.clone())),
-            Arc::new(LocalSessionManager::default()),
+            move || {
+                if factory_cancel.is_cancelled() {
+                    return Err(std::io::Error::other("PROJECT_STOPPED"));
+                }
+                Ok(relay::Relay::new(copy.clone()))
+            },
+            sessions.clone(),
             config,
         );
         let identity = serde_json::json!({"ownerPid":std::process::id(),"generation":generation,"projectId":options.project_id});
+        let mcp_path = host
+            .map(|_| format!("/mcp/{}", options.project_id))
+            .unwrap_or_else(|| "/mcp".into());
+        let identity_path = host
+            .map(|_| format!("/identity/{}", options.project_id))
+            .unwrap_or_else(|| "/identity".into());
         let app = Router::new()
             .route(
-                "/identity",
+                &identity_path,
                 axum::routing::get(move || {
                     let value = identity.clone();
                     async move { axum::Json(value) }
                 }),
             )
-            .nest_service("/mcp", service)
+            .nest_service(&mcp_path, service)
             .layer(middleware::from_fn_with_state(
                 Auth {
                     token: format!("Bearer {token}"),
@@ -191,10 +305,42 @@ impl Gateway {
                 authorize,
             ));
         let shutdown = cancel.clone();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown.cancelled_owned())
+        let (server, registration) = if let Some(host) = host {
+            let mut routes = host.routes.write().unwrap();
+            anyhow::ensure!(!host.cancel.is_cancelled(), "SHARED_GATEWAY_STOPPED");
+            anyhow::ensure!(
+                !routes.contains_key(&options.project_id),
+                "PROJECT_ALREADY_REGISTERED"
+            );
+            routes.insert(options.project_id.clone(), (app, cancel.clone()));
+            (
+                None,
+                Some((host.routes.clone(), options.project_id.clone())),
+            )
+        } else {
+            (
+                Some(tokio::spawn(async move {
+                    axum::serve(listener.unwrap(), app)
+                        .with_graceful_shutdown(shutdown.cancelled_owned())
+                        .await
+                })),
+                None,
+            )
+        };
+        let cleanup_sessions = sessions.clone();
+        let cleanup_cancel = cancel.clone();
+        tokio::spawn(async move {
+            cleanup_cancel.cancelled().await;
+            let handles: Vec<_> = cleanup_sessions
+                .sessions
+                .write()
                 .await
+                .drain()
+                .map(|(_, h)| h)
+                .collect();
+            for handle in handles {
+                let _ = handle.close().await;
+            }
         });
         Ok(Self {
             logs,
@@ -208,6 +354,9 @@ impl Gateway {
             upstream: Some(upstream),
             cancel,
             server,
+            registration,
+            endpoint: format!("http://127.0.0.1:{port}{mcp_path}"),
+            sessions,
         })
     }
     pub fn drain_logs(&self) -> Vec<String> {
@@ -215,6 +364,9 @@ impl Gateway {
     }
     pub fn port(&self) -> u16 {
         self.port
+    }
+    pub fn endpoint(&self) -> String {
+        self.endpoint.clone()
     }
     pub fn pid(&self) -> u32 {
         self.pid
@@ -236,10 +388,30 @@ impl Gateway {
             .collect()
     }
     pub fn is_alive(&self) -> bool {
-        !self.shared.peer.is_transport_closed() && !self.shared.poisoned.load(Ordering::SeqCst)
+        !self.cancel.is_cancelled()
+            && self
+                .server
+                .as_ref()
+                .is_none_or(|server| !server.is_finished())
+            && !self.shared.peer.is_transport_closed()
+            && !self.shared.poisoned.load(Ordering::SeqCst)
     }
     pub async fn stop(mut self) -> anyhow::Result<()> {
-        self.cancel.cancel();
+        self.unregister();
+        let _ = tokio::time::timeout(Duration::from_secs(1), async {
+            let handles: Vec<_> = self
+                .sessions
+                .sessions
+                .write()
+                .await
+                .drain()
+                .map(|(_, h)| h)
+                .collect();
+            for handle in handles {
+                let _ = handle.close().await;
+            }
+        })
+        .await;
         if let Some(service) = self.upstream.take() {
             let _ = tokio::time::timeout(Duration::from_secs(3), service.cancel()).await;
         }
@@ -259,9 +431,17 @@ impl Gateway {
             job.terminate_and_wait().await?;
         }
         self.job.take();
-        self.server.abort();
-        let _ = (&mut self.server).await;
+        if let Some(mut server) = self.server.take() {
+            server.abort();
+            let _ = (&mut server).await;
+        }
         Ok(())
+    }
+    fn unregister(&mut self) {
+        self.cancel.cancel();
+        if let Some((routes, id)) = self.registration.take() {
+            routes.write().unwrap().remove(&id);
+        }
     }
 }
 
@@ -275,7 +455,7 @@ pub async fn connect(
         .connect_timeout(Duration::from_secs(10))
         .build()?;
     let identity: serde_json::Value = http
-        .get(record.endpoint.replace("/mcp", "/identity"))
+        .get(project_protocol::identity_endpoint(record)?)
         .bearer_auth(&record.token)
         .timeout(Duration::from_secs(20))
         .send()
@@ -306,8 +486,10 @@ pub async fn probe(record: &project_protocol::RuntimeRecord) -> anyhow::Result<V
 }
 impl Drop for Gateway {
     fn drop(&mut self) {
-        self.cancel.cancel();
-        self.server.abort();
+        self.unregister();
+        if let Some(server) = &self.server {
+            server.abort();
+        }
         // Closing Job Object terminates every owned descendant on Windows.
         self.job.take();
     }
@@ -316,6 +498,100 @@ impl Drop for Gateway {
 #[cfg(test)]
 mod persistent_http_tests {
     use super::*;
+    #[tokio::test]
+    async fn shared_http_routes_enforce_project_auth_and_unregister_independently() {
+        let host = SharedGateway::start(0).await.unwrap();
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let a = uuid::Uuid::new_v4().to_string();
+        let b = uuid::Uuid::new_v4().to_string();
+        let cancel_a = host.cancel.child_token();
+        for (id, token, cancel) in [
+            (&a, "token-a", cancel_a.clone()),
+            (&b, "token-b", host.cancel.child_token()),
+        ] {
+            let app = Router::new()
+                .route(&format!("/mcp/{id}"), axum::routing::get(|| async { "ok" }))
+                .layer(middleware::from_fn_with_state(
+                    Auth {
+                        token: format!("Bearer {token}"),
+                        host: format!("127.0.0.1:{}", host.port()),
+                    },
+                    authorize,
+                ));
+            host.routes
+                .write()
+                .unwrap()
+                .insert(id.clone(), (app, cancel));
+        }
+        let endpoint = |id: &str| format!("http://127.0.0.1:{}/mcp/{id}", host.port());
+        assert_eq!(
+            http.get(endpoint(&a))
+                .bearer_auth("token-a")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            http.get(endpoint(&b))
+                .bearer_auth("token-a")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            http.get(endpoint(&a))
+                .bearer_auth("token-a")
+                .header("Origin", "http://example.com")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            http.get(endpoint(&a))
+                .bearer_auth("token-a")
+                .header("Host", "evil.example")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            http.get(endpoint("unknown")).send().await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+        cancel_a.cancel();
+        host.routes.write().unwrap().remove(&a);
+        assert_eq!(
+            http.get(endpoint(&a))
+                .bearer_auth("token-a")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            http.get(endpoint(&b))
+                .bearer_auth("token-b")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        let port = host.port();
+        assert!(SharedGateway::start(port).await.is_err());
+        host.stop().await.unwrap();
+        let rebound = SharedGateway::start(port).await.unwrap();
+        rebound.stop().await.unwrap();
+    }
     fn options(token: &str, port: Option<u16>) -> GatewayOptions {
         GatewayOptions {
             project_id: uuid::Uuid::new_v4().to_string(),

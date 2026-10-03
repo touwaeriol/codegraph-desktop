@@ -14,7 +14,7 @@ pub fn open(dir: &Path) -> Result<Connection> {
         ));
     }
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version > 2 {
+    if version > 3 {
         return Err(AppError::new(
             "DATABASE_VERSION",
             "数据库版本较新，请升级应用",
@@ -22,23 +22,48 @@ pub fn open(dir: &Path) -> Result<Connection> {
     }
     let tx = db.transaction()?;
     tx.execute_batch("CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, canonical_key TEXT UNIQUE NOT NULL, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS managed_config(project_id TEXT NOT NULL, client TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(project_id,client)); CREATE TABLE IF NOT EXISTS project_http(project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE, port INTEGER UNIQUE NOT NULL CHECK(port > 0 AND port <= 65535), token TEXT NOT NULL); PRAGMA user_version=2;")?;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS shared_http(id INTEGER PRIMARY KEY CHECK(id=1), port INTEGER NOT NULL CHECK(port > 0 AND port <= 65535)); CREATE TABLE IF NOT EXISTS http_migration_pending(project_id TEXT NOT NULL, client TEXT NOT NULL, old_fingerprint TEXT NOT NULL, new_fingerprint TEXT NOT NULL, PRIMARY KEY(project_id,client)); PRAGMA user_version=3;")?;
     tx.commit()?;
     Ok(db)
 }
 #[derive(Clone)]
 pub struct HttpBinding {
+    pub project_id: String,
     pub port: u16,
     pub token: String,
 }
 impl HttpBinding {
     pub fn endpoint(&self) -> String {
-        format!("http://127.0.0.1:{}/mcp", self.port)
+        format!("http://127.0.0.1:{}/mcp/{}", self.port, self.project_id)
     }
     pub fn authorization(&self) -> String {
         format!("Bearer {}", self.token)
     }
 }
 pub fn ensure_http_binding(db: &mut Connection, project_id: &str) -> Result<HttpBinding> {
+    let mut binding = legacy_http_binding(db, project_id)?;
+    binding.port = ensure_shared_http_port(db)?;
+    Ok(binding)
+}
+pub fn ensure_shared_http_port(db: &mut Connection) -> Result<u16> {
+    use rusqlite::OptionalExtension;
+    db.busy_timeout(std::time::Duration::from_secs(5))?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let existing: Option<u16> = tx
+        .query_row("SELECT port FROM shared_http WHERE id=1", [], |r| r.get(0))
+        .optional()?;
+    let port = if let Some(port) = existing {
+        port
+    } else {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        let port = listener.local_addr()?.port();
+        tx.execute("INSERT INTO shared_http(id,port) VALUES(1,?1)", [port])?;
+        port
+    };
+    tx.commit()?;
+    Ok(port)
+}
+fn legacy_http_binding(db: &mut Connection, project_id: &str) -> Result<HttpBinding> {
     use rusqlite::OptionalExtension;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -57,7 +82,11 @@ pub fn ensure_http_binding(db: &mut Connection, project_id: &str) -> Result<Http
             ));
         }
         tx.commit()?;
-        return Ok(HttpBinding { port, token });
+        return Ok(HttpBinding {
+            project_id: project_id.into(),
+            port,
+            token,
+        });
     }
     let registered: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
@@ -90,7 +119,11 @@ pub fn ensure_http_binding(db: &mut Connection, project_id: &str) -> Result<Http
         )?;
         tx.commit()?;
         drop(listener);
-        return Ok(HttpBinding { port, token });
+        return Ok(HttpBinding {
+            project_id: project_id.into(),
+            port,
+            token,
+        });
     }
     Err(AppError::new(
         "PORT_BIND_FAILED",
@@ -257,7 +290,8 @@ mod http_binding_tests {
         add(&db, "b");
         let first = ensure_http_binding(&mut db, "a").unwrap();
         let second = ensure_http_binding(&mut db, "b").unwrap();
-        assert_ne!(first.port, second.port);
+        assert_eq!(first.port, second.port);
+        assert_ne!(first.endpoint(), second.endpoint());
         assert!(first.token != second.token);
         assert_eq!(first.token.len(), 64);
         assert!(!serde_json::to_string(&list(&db).unwrap())
@@ -330,6 +364,50 @@ mod http_binding_tests {
         let version: i64 = upgraded
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
+    }
+}
+
+#[cfg(test)]
+mod shared_upgrade_tests {
+    use super::*;
+    #[test]
+    fn v2_upgrade_preserves_legacy_identity_and_stable_shared_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = open(dir.path()).unwrap();
+        let p = Project {
+            id: "old".into(),
+            name: "old".into(),
+            root_path: "old".into(),
+            canonical_path: "old".into(),
+            notes: String::new(),
+            auto_start: false,
+            created_at: now(),
+            updated_at: now(),
+            previous_roots: vec![],
+        };
+        save(&db, &p).unwrap();
+        let old = ensure_http_binding(&mut db, "old").unwrap();
+        let legacy: u16 = db
+            .query_row("SELECT port FROM project_http", [], |r| r.get(0))
+            .unwrap();
+        db.execute_batch(
+            "DROP TABLE shared_http; DROP TABLE http_migration_pending; PRAGMA user_version=2;",
+        )
+        .unwrap();
+        drop(db);
+        let mut upgraded = open(dir.path()).unwrap();
+        let shared = ensure_http_binding(&mut upgraded, "old").unwrap();
+        assert_eq!(old.token, shared.token);
+        assert_eq!(
+            legacy,
+            upgraded
+                .query_row("SELECT port FROM project_http", [], |r| r.get::<_, u16>(0))
+                .unwrap()
+        );
+        drop(upgraded);
+        let mut reopened = open(dir.path()).unwrap();
+        assert_eq!(shared.port, ensure_shared_http_port(&mut reopened).unwrap());
+        assert_eq!(list(&reopened).unwrap().len(), 1);
     }
 }

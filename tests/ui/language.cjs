@@ -116,7 +116,7 @@ async function mock(page, delaySettings = false) {
                 path: "D:\\fixture\\.codex\\config.toml",
                 before: "# 用户文件原文\n",
                 after:
-                  '# 用户文件原文\n[mcp_servers.codegraph]\nurl="http://127.0.0.1:43123/mcp"\n',
+                  '# 用户文件原文\n[mcp_servers.codegraph]\nurl="http://127.0.0.1:43123/mcp/test-project"\n',
                 existed: true,
                 conflict: false,
               },
@@ -211,11 +211,28 @@ async function bounds(page, locator) {
       .getByRole("heading", { name: "Settings", exact: true })
       .waitFor();
     assert.equal(await page.locator("html").getAttribute("lang"), "en");
-    await bounds(page, page.getByRole("dialog"));
+    await bounds(page, page.locator("main"));
+    assert.equal(await page.getByRole("dialog").count(), 0);
     await page.getByLabel("Display language").scrollIntoViewIfNeeded();
-    await page.getByRole("dialog").evaluate((el) => (el.scrollTop = 0));
+    await page.locator("main").evaluate((el) => (el.scrollTop = 0));
     await page.screenshot({ path: ".tools/language-settings-en.png" });
-    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await page.locator("#entry").fill("unsaved entry draft");
+    await page
+      .getByRole("button", { name: "Back to projects", exact: true })
+      .click();
+    await page.getByRole("tab", { name: "Overview", exact: true }).waitFor();
+    await page.keyboard.press("Control+,");
+    await page.getByLabel("Display language").waitFor();
+    assert.equal(
+      await page.locator("#entry").inputValue(),
+      "unsaved entry draft",
+    );
+    await page
+      .getByRole("navigation", { name: "Project list" })
+      .getByRole("button")
+      .first()
+      .click();
+    await page.getByRole("tab", { name: "Overview", exact: true }).waitFor();
     await page.reload();
     await page.getByRole("tab", { name: "Overview", exact: true }).waitFor();
     assert.ok(
@@ -226,6 +243,11 @@ async function bounds(page, locator) {
     await page
       .getByRole("tab", { name: "MCP configuration", exact: true })
       .click();
+    assert.ok(
+      (await page.locator("main").innerText()).includes(
+        "http://127.0.0.1:43123/mcp/test-project",
+      ),
+    );
     await page
       .getByRole("button", { name: "Preview configuration", exact: true })
       .click();
@@ -246,14 +268,15 @@ async function bounds(page, locator) {
       .getByRole("button", { name: "Save preferences", exact: true })
       .click();
     await page.getByRole("heading", { name: "设置", exact: true }).waitFor();
-    await page.getByRole("button", { name: "完成", exact: true }).click();
+    await page.getByRole("button", { name: "返回项目", exact: true }).click();
     await page.reload();
     await page.getByRole("tab", { name: "概览", exact: true }).waitFor();
     assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
     assert.deepEqual(errors, []);
     results.push(
       "zh -> saved en -> reload en -> saved zh -> reload zh",
-      "English settings, diff editor, timestamps and 1000x680 bounds",
+      "English settings page, diff editor, timestamps and 1000x680 bounds",
+      "Settings is not a dialog; Ctrl+, and sidebar navigation preserve unsaved form drafts",
       "User project names, notes, file text and upstream logs stay unchanged",
     );
     fs.writeFileSync(

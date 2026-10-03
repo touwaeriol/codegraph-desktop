@@ -33,7 +33,7 @@ const fs = require('node:fs');
               if (window.__uiTest.invalidOriginal && draft.mode === 'merge') throw new Error('现有文件格式错误');
               if (draft.mode === 'edit' && draft.content === 'INVALID') throw new Error('配置语法错误，请修正');
               const before = client === 'codex' ? `# existing setting\nmodel = "existing"\n${window.__uiTest.external ? '# external-change\n' : ''}` : '{"mcpServers":{"other":{"command":"other"}}}';
-              const generated = client === 'codex' ? '[mcp_servers.codegraph]\nurl = "http://127.0.0.1:43123/mcp"\nhttp_headers = { Authorization = "Bearer TEST_FIXTURE_ONLY" }\n' : '{"mcpServers":{"codegraph":{"type":"http","url":"http://127.0.0.1:43123/mcp","headers":{"Authorization":"Bearer TEST_FIXTURE_ONLY"}}}}';
+              const generated = client === 'codex' ? '[mcp_servers.codegraph]\nurl = "http://127.0.0.1:43123/mcp/11111111-1111-4111-8111-111111111111"\nhttp_headers = { Authorization = "Bearer TEST_FIXTURE_ONLY" }\n' : '{"mcpServers":{"codegraph":{"type":"http","url":"http://127.0.0.1:43123/mcp/11111111-1111-4111-8111-111111111111","headers":{"Authorization":"Bearer TEST_FIXTURE_ONLY"}}}}';
               return { client, path: `D:\\fixture\\${client === 'codex' ? '.codex\\config.toml' : '.mcp.json'}`, before, after: draft.mode === 'edit' ? draft.content : draft.mode === 'overwrite' ? generated : client === 'codex' ? before + generated : generated, existed: true, conflict: true };
             }) };
           }

@@ -42,11 +42,18 @@ pub fn validate_runtime(record: &RuntimeRecord) -> anyhow::Result<()> {
             && url.password().is_none()
             && url.fragment().is_none()
             && url.query().is_none()
-            && url.path() == "/mcp",
+            && (url.path() == "/mcp" || url.path() == format!("/mcp/{}", record.project_id)),
         "运行地址无效"
     );
     uuid::Uuid::parse_str(&record.generation)?;
     Ok(())
+}
+
+pub fn identity_endpoint(record: &RuntimeRecord) -> anyhow::Result<String> {
+    validate_runtime(record)?;
+    let mut url = url::Url::parse(&record.endpoint)?;
+    url.set_path(&url.path().replacen("/mcp", "/identity", 1));
+    Ok(url.into())
 }
 
 pub fn write_runtime(record: &RuntimeRecord) -> anyhow::Result<()> {
@@ -139,6 +146,27 @@ mod tests {
     fn reject_invalid_identity() {
         let mut r = record("http://127.0.0.1:43123/mcp");
         r.generation = "old".into();
+        assert!(validate_runtime(&r).is_err());
+    }
+    #[test]
+    fn shared_endpoint_is_bound_to_exact_project_identity() {
+        let mut r = record("http://127.0.0.1:43123/mcp");
+        assert_eq!(
+            identity_endpoint(&r).unwrap(),
+            "http://127.0.0.1:43123/identity"
+        );
+        r.endpoint = format!("http://127.0.0.1:43123/mcp/{}", r.project_id);
+        assert!(validate_runtime(&r).is_ok());
+        assert_eq!(
+            identity_endpoint(&r).unwrap(),
+            format!("http://127.0.0.1:43123/identity/{}", r.project_id)
+        );
+        for suffix in ["/", "/extra", "?x=1", "#fragment"] {
+            let mut bad = r.clone();
+            bad.endpoint.push_str(suffix);
+            assert!(validate_runtime(&bad).is_err());
+        }
+        r.project_id = uuid::Uuid::new_v4().to_string();
         assert!(validate_runtime(&r).is_err());
     }
 }

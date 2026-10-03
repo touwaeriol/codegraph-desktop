@@ -607,6 +607,12 @@ pub fn status(p: &Project, binding: &HttpBinding) -> Vec<ConfigStatus> {
                 item.state = "parseError".into();
                 item.message = Some(e.message);
             }
+            if item.state == "repair" && item.message.is_none() {
+                item.message = Some(crate::i18n::tr(
+                    "连接地址或凭据与当前项目不一致，请预览并更新配置",
+                    "Connection settings differ from this project. Preview and update the configuration",
+                ).into());
+            }
             item
         })
         .collect()
@@ -1470,6 +1476,7 @@ mod override_tests {
 #[cfg(test)]
 fn test_binding() -> HttpBinding {
     HttpBinding {
+        project_id: "test-project".into(),
         port: 41761,
         token: "a".repeat(64),
     }
@@ -1606,4 +1613,91 @@ mod http_config_tests {
         assert!(!error.message.contains(&binding.token));
         assert!(!error.message.contains("Bearer"));
     }
+}
+
+/// Prepare only an unchanged, previously owned HTTP entry. Never create a client file.
+pub fn shared_http_migration_preview(
+    p: &Project,
+    client: &str,
+    owned: &str,
+    old_port: u16,
+    binding: &HttpBinding,
+) -> Result<Option<ConfigPreview>> {
+    let relative = match client {
+        "codex" => ".codex/config.toml",
+        "claude" => ".mcp.json",
+        _ => return Ok(None),
+    };
+    let path = Path::new(&p.canonical_path).join(relative);
+    safe_path(Path::new(&p.canonical_path), &path)?;
+    let Some(original) = read(&path)? else {
+        return Ok(None);
+    };
+    let before = String::from_utf8(original.clone())
+        .map_err(|_| AppError::new("CONFIG_PARSE_FAILED", "Invalid UTF-8 configuration"))?;
+    if entry_fingerprint(&before, client, "codegraph")?.as_deref() != Some(owned) {
+        return Ok(None);
+    }
+    let old_url = format!("http://127.0.0.1:{old_port}/mcp");
+    let text = before.trim_start_matches('\u{feff}');
+    let after = if client == "codex" {
+        let mut doc = text
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|_| AppError::new("CONFIG_PARSE_FAILED", "Invalid TOML configuration"))?;
+        let entry = &mut doc["mcp_servers"]["codegraph"];
+        if entry.get("url").and_then(|v| v.as_str()) != Some(old_url.as_str())
+            || entry
+                .get("http_headers")
+                .and_then(|v| v.get("Authorization"))
+                .and_then(|v| v.as_str())
+                != Some(binding.authorization().as_str())
+            || entry.get("command").is_some()
+            || entry.get("args").is_some()
+        {
+            return Ok(None);
+        }
+        entry["url"] = toml_edit::value(binding.endpoint());
+        doc.to_string()
+    } else {
+        let mut doc: serde_json::Value = serde_json::from_str(text)
+            .map_err(|_| AppError::new("CONFIG_PARSE_FAILED", "Invalid JSON configuration"))?;
+        let entry = &mut doc["mcpServers"]["codegraph"];
+        if entry.get("url").and_then(|v| v.as_str()) != Some(old_url.as_str())
+            || entry.get("type").and_then(|v| v.as_str()) != Some("http")
+            || entry
+                .get("headers")
+                .and_then(|v| v.get("Authorization"))
+                .and_then(|v| v.as_str())
+                != Some(binding.authorization().as_str())
+            || entry.get("command").is_some()
+            || entry.get("args").is_some()
+        {
+            return Ok(None);
+        }
+        entry["url"] = binding.endpoint().into();
+        format!("{}\n", serde_json::to_string_pretty(&doc).unwrap())
+    };
+    let after = if before.starts_with('\u{feff}') {
+        format!("\u{feff}{after}")
+    } else {
+        after
+    };
+    let fingerprint = entry_fingerprint(&after, client, "codegraph")?;
+    Ok(Some(ConfigPreview {
+        validated_root: None,
+        preview_id: uuid::Uuid::new_v4().to_string(),
+        project_id: p.id.clone(),
+        service_name: "codegraph".into(),
+        files: vec![ConfigFile {
+            client: client.into(),
+            path: path.to_string_lossy().into(),
+            before,
+            after,
+            existed: true,
+            conflict: false,
+            original: Some(original),
+            fingerprint,
+            restore_bytes: None,
+        }],
+    }))
 }

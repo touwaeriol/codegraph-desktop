@@ -133,9 +133,9 @@ export default function App() {
     [filter, setFilter] = useState("all"),
     [sort, setSort] = useState("name"),
     [tab, setTab] = useState("overview"),
-    [modal, setModal] = useState<
-      "add" | "edit" | "relocate" | "remove" | "settings" | null
-    >(null),
+    [modal, setModal] = useState<"add" | "edit" | "relocate" | "remove" | null>(
+      null,
+    ),
     [form, setForm] = useState({
       path: "",
       name: "",
@@ -158,11 +158,26 @@ export default function App() {
       action: () => Promise<void>;
     } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const [section, setSection] = useState<"project" | "settings">("project");
+  const [settingsError, setSettingsError] = useState("");
   const mainRef = useRef<HTMLElement>(null);
   const scrollPositions = useRef(new Map<string, number>());
   const [duplicateProjectId, setDuplicateProjectId] = useState<string | null>(
     null,
   );
+  function navigate(next: "project" | "settings") {
+    scrollPositions.current.set(
+      section === "settings" ? "settings" : `${selected}:${tab}`,
+      mainRef.current?.scrollTop ?? 0,
+    );
+    setSection(next);
+  }
+  function openSettings() {
+    if (!busy) {
+      setModal(null);
+      navigate("settings");
+    }
+  }
   function changeTab(next: string) {
     scrollPositions.current.set(
       `${selected}:${tab}`,
@@ -173,8 +188,10 @@ export default function App() {
   useLayoutEffect(() => {
     if (mainRef.current)
       mainRef.current.scrollTop =
-        scrollPositions.current.get(`${selected}:${tab}`) ?? 0;
-  }, [selected, tab]);
+        scrollPositions.current.get(
+          section === "settings" ? "settings" : `${selected}:${tab}`,
+        ) ?? 0;
+  }, [selected, tab, section]);
   const environmentLoaded = useRef(false);
   const refreshRequest = useRef(0);
   const project = projects.find((p) => p.id === selected),
@@ -282,12 +299,12 @@ export default function App() {
       }
       if (event.ctrlKey && event.key === ",") {
         event.preventDefault();
-        showModal("settings");
+        openSettings();
       }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [project]);
+  }, [project, busy, section, tab]);
   async function run(action: () => Promise<unknown>, success?: string) {
     setBusy(true);
     setError("");
@@ -326,6 +343,7 @@ export default function App() {
       if (modal === "add") {
         const item = await call<Project>("add_project", form);
         setSelected(item.id);
+        navigate("project");
       } else if (modal === "edit")
         await call("update_project", {
           projectId: selected,
@@ -548,6 +566,7 @@ export default function App() {
                 key={p.id}
                 className={`project-row ${p.id === selected ? "selected" : ""}`}
                 onClick={() => {
+                  navigate("project");
                   setSelected(p.id);
                   setError("");
                 }}
@@ -584,8 +603,9 @@ export default function App() {
             </div>
             <Button
               variant="ghost"
-              className="w-full justify-start"
-              onClick={() => showModal("settings")}
+              className={`w-full justify-start ${section === "settings" ? "bg-white text-primary" : ""}`}
+              aria-current={section === "settings" ? "page" : undefined}
+              onClick={() => openSettings()}
             >
               <Settings2 />
               {t("设置")}
@@ -602,498 +622,581 @@ export default function App() {
               {t("浏览器预览 · 桌面环境未连接。请启动桌面应用以管理真实项目。")}
             </div>
           )}
-          {project ? (
-            <>
-              <header className="project-header">
-                <div className="flex justify-between items-center gap-2 mb-4">
-                  <div className="text-xs text-muted-foreground flex items-center gap-2">
-                    {t("项目工作台")}
-                    <span>/</span> {project.name}
-                  </div>
-                  <div className="toolbar">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        void run(() =>
-                          call("open_project_directory", {
-                            projectId: selected,
-                          }),
-                        )
-                      }
-                    >
-                      <FolderOpen />
-                      {t("打开目录")}
-                    </Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={t("项目菜单")}
-                        >
-                          <MoreHorizontal />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent>
-                        <DropdownMenuGroup>
-                          <DropdownMenuItem onClick={() => showModal("edit")}>
-                            {t("编辑名称与备注")}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => showModal("relocate")}
-                          >
-                            {t("重新定位项目")}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="text-destructive"
-                            onClick={() => showModal("remove")}
-                          >
-                            {t("移除管理记录")}
-                          </DropdownMenuItem>
-                        </DropdownMenuGroup>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
+          <section
+            hidden={section !== "settings"}
+            aria-label={t("设置")}
+            data-testid="settings-page"
+          >
+            <header className="project-header">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div>
+                  <h1 className="text-2xl font-semibold">{t("设置")}</h1>
+                  <p className="text-sm text-muted-foreground mt-2">
+                    {t("管理本机运行环境与应用偏好")}
+                  </p>
                 </div>
-                <div className="flex justify-between items-start gap-4 flex-wrap">
-                  <div className="min-w-0">
-                    <h1 className="text-2xl font-semibold tracking-tight">
-                      {project.name}
-                    </h1>
-                    <div className="flex gap-2 items-center mt-2 text-muted-foreground">
-                      <span
-                        className="mono text-xs truncate max-w-[600px]"
-                        title={project.rootPath}
-                      >
-                        {project.rootPath}
-                      </span>
+                <Button variant="outline" onClick={() => navigate("project")}>
+                  {t("返回项目")}
+                </Button>
+              </div>
+            </header>
+            <div className="content max-w-3xl space-y-5">
+              <ErrorNotice error={settingsError} />
+              {desktop && !settings ? (
+                <p role="status" className="text-sm text-muted-foreground">
+                  {t("正在读取设置…")}
+                </p>
+              ) : (
+                <SettingsForm
+                  settings={settings}
+                  environment={environment}
+                  busy={busy}
+                  detect={async (selectedPath) => {
+                    setBusy(true);
+                    setSettingsError("");
+                    try {
+                      const detected = await call<Environment>(
+                        selectedPath
+                          ? "set_codegraph_entry"
+                          : "detect_codegraph",
+                        selectedPath ? { selectedPath } : undefined,
+                      );
+                      setEnvironment(detected);
+                      environmentLoaded.current = true;
+                      if (!detected.available)
+                        throw new Error(
+                          detected.error || t("未找到可用的 CodeGraph"),
+                        );
+                      if (!detected.entry)
+                        throw new Error(t("检测未返回可用入口，请重新检测。"));
+                      await refresh();
+                      setError("");
+                      toast.success(t("CodeGraph 检测成功"));
+                      return detected;
+                    } catch (e) {
+                      setSettingsError(message(e));
+                      return null;
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                  save={async (action, notify = true) => {
+                    setBusy(true);
+                    setSettingsError("");
+                    try {
+                      await action();
+                      setError("");
+                      environmentLoaded.current = false;
+                      await refresh();
+                      if (notify) toast.success(t("设置已更新"));
+                    } catch (e) {
+                      setSettingsError(message(e));
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                />
+              )}
+            </div>
+          </section>
+          <div hidden={section !== "project"}>
+            {project ? (
+              <>
+                <header className="project-header">
+                  <div className="flex justify-between items-center gap-2 mb-4">
+                    <div className="text-xs text-muted-foreground flex items-center gap-2">
+                      {t("项目工作台")}
+                      <span>/</span> {project.name}
+                    </div>
+                    <div className="toolbar">
                       <Button
                         variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 shrink-0"
-                        aria-label={t("复制项目路径")}
+                        size="sm"
                         onClick={() =>
-                          void navigator.clipboard
-                            .writeText(project.rootPath)
-                            .then(() => toast.success(t("路径已复制")))
+                          void run(() =>
+                            call("open_project_directory", {
+                              projectId: selected,
+                            }),
+                          )
                         }
                       >
-                        <Copy size={12} />
+                        <FolderOpen />
+                        {t("打开目录")}
                       </Button>
-                    </div>
-                  </div>
-                  <div className="toolbar">
-                    {snapshot?.state === "running" ? (
-                      <>
-                        <Button
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() => void runtime("restart")}
-                        >
-                          <RefreshCw />
-                          {t("重启")}
-                        </Button>
-                        <Button
-                          disabled={busy}
-                          onClick={() => void runtime("stop")}
-                        >
-                          <Square />
-                          {t("停止实例")}
-                        </Button>
-                      </>
-                    ) : snapshot?.state === "starting" ? (
-                      <Button
-                        disabled={busy}
-                        onClick={() => void cancelStartup()}
-                      >
-                        <Loader2 className="animate-spin" />
-                        {t("取消启动")}
-                      </Button>
-                    ) : (
-                      <Button
-                        disabled={
-                          busy ||
-                          !environment?.available ||
-                          snapshot?.state === "stopping"
-                        }
-                        onClick={() =>
-                          snapshot?.indexState === "missing"
-                            ? void indexing("init")
-                            : void runtime("start")
-                        }
-                      >
-                        <Play />
-                        {snapshot?.indexState === "missing"
-                          ? t("初始化索引")
-                          : snapshot?.state === "stopping"
-                            ? t("停止中")
-                            : t("启动实例")}
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 mt-3 text-xs text-muted-foreground">
-                  <Status snapshot={snapshot} />
-                  <span>
-                    {snapshot
-                      ? indexNames()[snapshot.indexState]
-                      : t("索引尚未获取")}
-                  </span>
-                  <span>
-                    {snapshot?.sessions ?? "—"}
-                    {t("个会话")}
-                  </span>
-                  {project.autoStart && <span>{t("应用启动时自动启动")}</span>}
-                </div>
-              </header>
-              <div className="content space-y-4">
-                <ErrorNotice error={error || snapshot?.error?.message || ""} />
-                {environment &&
-                  (!environment.available || environment.error) && (
-                    <Alert>
-                      <TriangleAlert />
-                      <AlertTitle>
-                        {environment.available
-                          ? t("CodeGraph 兼容性提示")
-                          : t("未找到可用的 CodeGraph")}
-                      </AlertTitle>
-                      <AlertDescription>
-                        {environment.error ??
-                          t("请在设置中选择安装入口，再进行索引与实例操作。")}
-                        <Button
-                          variant="link"
-                          onClick={() => showModal("settings")}
-                        >
-                          {t("配置运行环境")}
-                        </Button>
-                      </AlertDescription>
-                    </Alert>
-                  )}
-                <Tabs value={tab} onValueChange={changeTab}>
-                  <TabsList className="mb-5">
-                    <TabsTrigger value="overview">{t("概览")}</TabsTrigger>
-                    <TabsTrigger value="config">{t("MCP 配置")}</TabsTrigger>
-                    <TabsTrigger value="logs">{t("运行日志")}</TabsTrigger>
-                  </TabsList>
-                  <TabsContent value="overview">
-                    <div className="panel-grid">
-                      <Card>
-                        <CardHeader className="flex-row justify-between">
-                          <div>
-                            <CardTitle className="flex items-center gap-2">
-                              <Activity size={17} />
-                              {t("实例")}
-                            </CardTitle>
-                            <CardDescription className="mt-2">
-                              {t("当前项目独立的进程与网关")}
-                            </CardDescription>
-                          </div>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
                           <Button
                             variant="ghost"
                             size="icon"
-                            aria-label={t("刷新状态")}
-                            disabled={busy}
-                            onClick={() =>
-                              void run(() =>
-                                call("refresh_index_status", {
-                                  projectId: selected,
-                                }),
-                              )
-                            }
+                            aria-label={t("项目菜单")}
                           >
-                            <RefreshCw size={16} />
+                            <MoreHorizontal />
                           </Button>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="metrics">
-                            <Metric
-                              name={t("运行状态")}
-                              value={
-                                snapshot
-                                  ? stateNames()[snapshot.state]
-                                  : t("尚未获取")
-                              }
-                            />
-                            <Metric
-                              name={t("本机端口")}
-                              value={snapshot?.port ?? t("尚未获取固定端口")}
-                            />
-                            <Metric
-                              name={t("进程 PID")}
-                              value={snapshot?.pid ?? "—"}
-                            />
-                            <Metric
-                              name={t("最近启动")}
-                              value={
-                                snapshot?.startedAt
-                                  ? new Date(snapshot.startedAt).toLocaleString(
-                                      language,
-                                    )
-                                  : "—"
-                              }
-                            />
-                            <Metric
-                              name={t("客户端会话")}
-                              value={snapshot?.sessions ?? t("尚未获取")}
-                            />
-                            {snapshot?.startedAt &&
-                              snapshot.state === "running" && (
-                                <div>
-                                  <div className="metric-label">
-                                    {t("运行时长")}
-                                  </div>
-                                  <Elapsed since={snapshot.startedAt} />
-                                </div>
-                              )}
-                            <Metric
-                              name={t("入口版本")}
-                              value={environment?.version ?? t("尚未获取")}
-                            />
-                          </div>
-                        </CardContent>
-                      </Card>
-                      <Card>
-                        <CardHeader>
-                          <CardTitle className="flex items-center gap-2">
-                            <GitBranch size={17} />
-                            {t("代码索引")}
-                          </CardTitle>
-                          <CardDescription>
-                            {t("统计与可用性以 CodeGraph 的实际结果为准")}
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="metrics">
-                            <Metric
-                              name={t("索引状态")}
-                              value={
-                                snapshot
-                                  ? indexNames()[snapshot.indexState]
-                                  : t("尚未获取")
-                              }
-                            />
-                            <Metric
-                              name={t("已索引文件")}
-                              value={
-                                snapshot?.indexStats?.fileCount ?? t("尚未获取")
-                              }
-                            />
-                            <Metric
-                              name={t("图谱节点")}
-                              value={
-                                snapshot?.indexStats?.nodeCount ?? t("尚未获取")
-                              }
-                            />
-                            <Metric
-                              name={t("图谱关系")}
-                              value={
-                                snapshot?.indexStats?.edgeCount ?? t("尚未获取")
-                              }
-                            />
-                            {snapshot?.indexStats?.checkedAt && (
-                              <Metric
-                                name={t("统计获取时间")}
-                                value={new Date(
-                                  snapshot.indexStats.checkedAt,
-                                ).toLocaleString(language)}
-                              />
-                            )}
-                          </div>
-                          <p className="text-xs text-muted-foreground my-6">
-                            {t(
-                              "运行期间同步或重建会短暂断开客户端，完成后恢复实例。",
-                            )}
-                          </p>
-                          <div className="toolbar">
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent>
+                          <DropdownMenuGroup>
+                            <DropdownMenuItem onClick={() => showModal("edit")}>
+                              {t("编辑名称与备注")}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => showModal("relocate")}
+                            >
+                              {t("重新定位项目")}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="text-destructive"
+                              onClick={() => showModal("remove")}
+                            >
+                              {t("移除管理记录")}
+                            </DropdownMenuItem>
+                          </DropdownMenuGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-start gap-4 flex-wrap">
+                    <div className="min-w-0">
+                      <h1 className="text-2xl font-semibold tracking-tight">
+                        {project.name}
+                      </h1>
+                      <div className="flex gap-2 items-center mt-2 text-muted-foreground">
+                        <span
+                          className="mono text-xs truncate max-w-[600px]"
+                          title={project.rootPath}
+                        >
+                          {project.rootPath}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 shrink-0"
+                          aria-label={t("复制项目路径")}
+                          onClick={() =>
+                            void navigator.clipboard
+                              .writeText(project.rootPath)
+                              .then(() => toast.success(t("路径已复制")))
+                          }
+                        >
+                          <Copy size={12} />
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="toolbar">
+                      {snapshot?.state === "running" ? (
+                        <>
+                          <Button
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() => void runtime("restart")}
+                          >
+                            <RefreshCw />
+                            {t("重启")}
+                          </Button>
+                          <Button
+                            disabled={busy}
+                            onClick={() => void runtime("stop")}
+                          >
+                            <Square />
+                            {t("停止实例")}
+                          </Button>
+                        </>
+                      ) : snapshot?.state === "starting" ? (
+                        <Button
+                          disabled={busy}
+                          onClick={() => void cancelStartup()}
+                        >
+                          <Loader2 className="animate-spin" />
+                          {t("取消启动")}
+                        </Button>
+                      ) : (
+                        <Button
+                          disabled={
+                            busy ||
+                            !environment?.available ||
+                            snapshot?.state === "stopping"
+                          }
+                          onClick={() =>
+                            snapshot?.indexState === "missing"
+                              ? void indexing("init")
+                              : void runtime("start")
+                          }
+                        >
+                          <Play />
+                          {snapshot?.indexState === "missing"
+                            ? t("初始化索引")
+                            : snapshot?.state === "stopping"
+                              ? t("停止中")
+                              : t("启动实例")}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 mt-3 text-xs text-muted-foreground">
+                    <Status snapshot={snapshot} />
+                    <span>
+                      {snapshot
+                        ? indexNames()[snapshot.indexState]
+                        : t("索引尚未获取")}
+                    </span>
+                    <span>
+                      {snapshot?.sessions ?? "—"}
+                      {t("个会话")}
+                    </span>
+                    {project.autoStart && (
+                      <span>{t("应用启动时自动启动")}</span>
+                    )}
+                  </div>
+                </header>
+                <div className="content space-y-4">
+                  <ErrorNotice
+                    error={error || snapshot?.error?.message || ""}
+                  />
+                  {environment &&
+                    (!environment.available || environment.error) && (
+                      <Alert>
+                        <TriangleAlert />
+                        <AlertTitle>
+                          {environment.available
+                            ? t("CodeGraph 兼容性提示")
+                            : t("未找到可用的 CodeGraph")}
+                        </AlertTitle>
+                        <AlertDescription>
+                          {environment.error ??
+                            t("请在设置中选择安装入口，再进行索引与实例操作。")}
+                          <Button variant="link" onClick={() => openSettings()}>
+                            {t("配置运行环境")}
+                          </Button>
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  <Tabs value={tab} onValueChange={changeTab}>
+                    <TabsList className="mb-5">
+                      <TabsTrigger value="overview">{t("概览")}</TabsTrigger>
+                      <TabsTrigger value="config">{t("MCP 配置")}</TabsTrigger>
+                      <TabsTrigger value="logs">{t("运行日志")}</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="overview">
+                      <div className="panel-grid">
+                        <Card>
+                          <CardHeader className="flex-row justify-between">
+                            <div>
+                              <CardTitle className="flex items-center gap-2">
+                                <Activity size={17} />
+                                {t("实例")}
+                              </CardTitle>
+                              <CardDescription className="mt-2">
+                                {t("当前项目独立的进程与共享网关路由")}
+                              </CardDescription>
+                            </div>
                             <Button
-                              variant="outline"
-                              disabled={busy || !environment?.available}
+                              variant="ghost"
+                              size="icon"
+                              aria-label={t("刷新状态")}
+                              disabled={busy}
                               onClick={() =>
-                                void indexing(
-                                  snapshot?.indexState === "missing"
-                                    ? "init"
-                                    : "sync",
+                                void run(() =>
+                                  call("refresh_index_status", {
+                                    projectId: selected,
+                                  }),
                                 )
                               }
                             >
-                              <RefreshCw />
-                              {snapshot?.indexState === "missing"
-                                ? t("初始化索引")
-                                : t("增量同步")}
+                              <RefreshCw size={16} />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              disabled={busy || !environment?.available}
-                              onClick={() => void indexing("rebuild")}
-                            >
-                              {t("重建索引")}
-                            </Button>
-                          </div>
-                        </CardContent>
-                      </Card>
-                      <Card className="col-span-full">
-                        <CardHeader>
-                          <CardTitle>{t("客户端接入")}</CardTitle>
-                          <CardDescription>
-                            {t("Codex 与 Claude Code 共用当前项目的一个实例")}
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent className="flex justify-between items-center gap-4 flex-wrap">
-                          <p className="text-sm text-muted-foreground">
-                            {t(
-                              "配置写入、独立连接测试与真实客户端会话分别验证。",
-                            )}
-                          </p>
-                          <Button
-                            variant="outline"
-                            onClick={() => changeTab("config")}
-                          >
-                            {t("配置客户端")}
-                            <ArrowRight />
-                          </Button>
-                        </CardContent>
-                      </Card>
-                      {project.notes && (
-                        <Card className="col-span-full">
-                          <CardHeader>
-                            <CardTitle>{t("项目备注")}</CardTitle>
                           </CardHeader>
-                          <CardContent className="whitespace-pre-wrap text-muted-foreground">
-                            {project.notes}
+                          <CardContent>
+                            <div className="metrics">
+                              <Metric
+                                name={t("运行状态")}
+                                value={
+                                  snapshot
+                                    ? stateNames()[snapshot.state]
+                                    : t("尚未获取")
+                                }
+                              />
+                              <Metric
+                                name={t("本机端口")}
+                                value={snapshot?.port ?? t("尚未获取固定端口")}
+                              />
+                              <Metric
+                                name={t("进程 PID")}
+                                value={snapshot?.pid ?? "—"}
+                              />
+                              <Metric
+                                name={t("最近启动")}
+                                value={
+                                  snapshot?.startedAt
+                                    ? new Date(
+                                        snapshot.startedAt,
+                                      ).toLocaleString(language)
+                                    : "—"
+                                }
+                              />
+                              <Metric
+                                name={t("客户端会话")}
+                                value={snapshot?.sessions ?? t("尚未获取")}
+                              />
+                              {snapshot?.startedAt &&
+                                snapshot.state === "running" && (
+                                  <div>
+                                    <div className="metric-label">
+                                      {t("运行时长")}
+                                    </div>
+                                    <Elapsed since={snapshot.startedAt} />
+                                  </div>
+                                )}
+                              <Metric
+                                name={t("入口版本")}
+                                value={environment?.version ?? t("尚未获取")}
+                              />
+                            </div>
                           </CardContent>
                         </Card>
-                      )}
-                    </div>
-                  </TabsContent>
-                  <ProjectTools
-                    key={selected}
-                    project={project}
-                    snapshot={snapshot}
-                    tab={tab}
-                    refresh={refresh}
-                  />
-                </Tabs>
-                {batch.length > 0 && (
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>{t("批量操作结果")}</CardTitle>
-                      <CardDescription>
-                        {batch.filter((b) => b.ok).length}
-                        {t("项已提交 ·")} {batch.filter((b) => !b.ok).length}
-                        {t("项失败")}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-2">
-                      {batch.map((b) => (
-                        <div
-                          key={b.projectId}
-                          className={`text-sm ${b.ok ? "" : "text-destructive"}`}
-                        >
-                          {b.name} · {b.ok ? t("操作已提交") : b.detail}
-                          {!b.ok && (
+                        <Card>
+                          <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                              <GitBranch size={17} />
+                              {t("代码索引")}
+                            </CardTitle>
+                            <CardDescription>
+                              {t("统计与可用性以 CodeGraph 的实际结果为准")}
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="metrics">
+                              <Metric
+                                name={t("索引状态")}
+                                value={
+                                  snapshot
+                                    ? indexNames()[snapshot.indexState]
+                                    : t("尚未获取")
+                                }
+                              />
+                              <Metric
+                                name={t("已索引文件")}
+                                value={
+                                  snapshot?.indexStats?.fileCount ??
+                                  t("尚未获取")
+                                }
+                              />
+                              <Metric
+                                name={t("图谱节点")}
+                                value={
+                                  snapshot?.indexStats?.nodeCount ??
+                                  t("尚未获取")
+                                }
+                              />
+                              <Metric
+                                name={t("图谱关系")}
+                                value={
+                                  snapshot?.indexStats?.edgeCount ??
+                                  t("尚未获取")
+                                }
+                              />
+                              {snapshot?.indexStats?.checkedAt && (
+                                <Metric
+                                  name={t("统计获取时间")}
+                                  value={new Date(
+                                    snapshot.indexStats.checkedAt,
+                                  ).toLocaleString(language)}
+                                />
+                              )}
+                            </div>
+                            <p className="text-xs text-muted-foreground my-6">
+                              {t(
+                                "运行期间同步或重建会短暂断开客户端，完成后恢复实例。",
+                              )}
+                            </p>
+                            <div className="toolbar">
+                              <Button
+                                variant="outline"
+                                disabled={busy || !environment?.available}
+                                onClick={() =>
+                                  void indexing(
+                                    snapshot?.indexState === "missing"
+                                      ? "init"
+                                      : "sync",
+                                  )
+                                }
+                              >
+                                <RefreshCw />
+                                {snapshot?.indexState === "missing"
+                                  ? t("初始化索引")
+                                  : t("增量同步")}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                disabled={busy || !environment?.available}
+                                onClick={() => void indexing("rebuild")}
+                              >
+                                {t("重建索引")}
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                        <Card className="col-span-full">
+                          <CardHeader>
+                            <CardTitle>{t("客户端接入")}</CardTitle>
+                            <CardDescription>
+                              {t("Codex 与 Claude Code 共用当前项目的一个实例")}
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent className="flex justify-between items-center gap-4 flex-wrap">
+                            <p className="text-sm text-muted-foreground">
+                              {t(
+                                "配置写入、独立连接测试与真实客户端会话分别验证。",
+                              )}
+                            </p>
                             <Button
-                              variant="link"
-                              size="sm"
-                              disabled={busy}
-                              onClick={() =>
-                                void run(async () => {
-                                  await call(`${b.action}_project`, {
-                                    projectId: b.projectId,
-                                  });
-                                  setBatch((old) =>
-                                    old.map((item) =>
-                                      item.projectId === b.projectId
-                                        ? {
-                                            ...item,
-                                            ok: true,
-                                            detail: t("重试已提交"),
-                                          }
-                                        : item,
-                                    ),
-                                  );
-                                })
-                              }
+                              variant="outline"
+                              onClick={() => changeTab("config")}
                             >
-                              {t("重试此项目")}
+                              {t("配置客户端")}
+                              <ArrowRight />
                             </Button>
-                          )}
+                          </CardContent>
+                        </Card>
+                        {project.notes && (
+                          <Card className="col-span-full">
+                            <CardHeader>
+                              <CardTitle>{t("项目备注")}</CardTitle>
+                            </CardHeader>
+                            <CardContent className="whitespace-pre-wrap text-muted-foreground">
+                              {project.notes}
+                            </CardContent>
+                          </Card>
+                        )}
+                      </div>
+                    </TabsContent>
+                    <ProjectTools
+                      key={selected}
+                      project={project}
+                      snapshot={snapshot}
+                      tab={tab}
+                      refresh={refresh}
+                    />
+                  </Tabs>
+                  {batch.length > 0 && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>{t("批量操作结果")}</CardTitle>
+                        <CardDescription>
+                          {batch.filter((b) => b.ok).length}
+                          {t("项已提交 ·")} {batch.filter((b) => !b.ok).length}
+                          {t("项失败")}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-2">
+                        {batch.map((b) => (
+                          <div
+                            key={b.projectId}
+                            className={`text-sm ${b.ok ? "" : "text-destructive"}`}
+                          >
+                            {b.name} · {b.ok ? t("操作已提交") : b.detail}
+                            {!b.ok && (
+                              <Button
+                                variant="link"
+                                size="sm"
+                                disabled={busy}
+                                onClick={() =>
+                                  void run(async () => {
+                                    await call(`${b.action}_project`, {
+                                      projectId: b.projectId,
+                                    });
+                                    setBatch((old) =>
+                                      old.map((item) =>
+                                        item.projectId === b.projectId
+                                          ? {
+                                              ...item,
+                                              ok: true,
+                                              detail: t("重试已提交"),
+                                            }
+                                          : item,
+                                      ),
+                                    );
+                                  })
+                                }
+                              >
+                                {t("重试此项目")}
+                              </Button>
+                            )}
+                          </div>
+                        ))}
+                      </CardContent>
+                    </Card>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="content">
+                <ErrorNotice error={error} />
+                {loading ? (
+                  <div className="empty-hero">
+                    <Loader2 className="animate-spin text-primary" />
+                    <p className="mt-4 text-muted-foreground">
+                      {t("正在读取项目…")}
+                    </p>
+                  </div>
+                ) : (
+                  <Empty className="empty-hero border-0">
+                    <EmptyHeader>
+                      <EmptyMedia
+                        variant="icon"
+                        className="bg-accent text-primary size-16 mb-4"
+                      >
+                        <GitBranch className="size-8" />
+                      </EmptyMedia>
+                      <Badge variant="outline" className="mb-3">
+                        {t("你的代码，井然有序")}
+                      </Badge>
+                      <EmptyTitle className="text-2xl">
+                        {t("添加一个项目，开始管理它的 CodeGraph")}
+                      </EmptyTitle>
+                      <EmptyDescription className="max-w-lg mt-3">
+                        {t(
+                          "为每个项目维护独立索引与运行实例，让 Codex 和 Claude Code 连接到正确的代码图谱。",
+                        )}
+                      </EmptyDescription>
+                    </EmptyHeader>
+                    <EmptyContent>
+                      <Button onClick={() => showModal("add")}>
+                        <FolderOpen />
+                        {t("选择项目目录")}
+                      </Button>
+                      <span className="text-xs text-muted-foreground">
+                        {t("或按 Ctrl+N 添加项目")}
+                      </span>
+                    </EmptyContent>
+                    <div className="steps">
+                      {[
+                        [
+                          "01",
+                          t("选择本地项目"),
+                          t("项目与 Git worktree 分别管理"),
+                        ],
+                        [
+                          "02",
+                          t("建立代码索引"),
+                          t("使用本机已安装的 CodeGraph"),
+                        ],
+                        [
+                          "03",
+                          t("接入 AI 客户端"),
+                          t("同一项目，共用一个受管实例"),
+                        ],
+                      ].map(([n, t, d]) => (
+                        <div key={n}>
+                          <span className="mono text-primary text-xs">{n}</span>
+                          <h3 className="font-medium my-2">{t}</h3>
+                          <p className="text-xs text-muted-foreground">{d}</p>
                         </div>
                       ))}
-                    </CardContent>
-                  </Card>
+                    </div>
+                  </Empty>
                 )}
               </div>
-            </>
-          ) : (
-            <div className="content">
-              <ErrorNotice error={error} />
-              {loading ? (
-                <div className="empty-hero">
-                  <Loader2 className="animate-spin text-primary" />
-                  <p className="mt-4 text-muted-foreground">
-                    {t("正在读取项目…")}
-                  </p>
-                </div>
-              ) : (
-                <Empty className="empty-hero border-0">
-                  <EmptyHeader>
-                    <EmptyMedia
-                      variant="icon"
-                      className="bg-accent text-primary size-16 mb-4"
-                    >
-                      <GitBranch className="size-8" />
-                    </EmptyMedia>
-                    <Badge variant="outline" className="mb-3">
-                      {t("你的代码，井然有序")}
-                    </Badge>
-                    <EmptyTitle className="text-2xl">
-                      {t("添加一个项目，开始管理它的 CodeGraph")}
-                    </EmptyTitle>
-                    <EmptyDescription className="max-w-lg mt-3">
-                      {t(
-                        "为每个项目维护独立索引与运行实例，让 Codex 和 Claude Code 连接到正确的代码图谱。",
-                      )}
-                    </EmptyDescription>
-                  </EmptyHeader>
-                  <EmptyContent>
-                    <Button onClick={() => showModal("add")}>
-                      <FolderOpen />
-                      {t("选择项目目录")}
-                    </Button>
-                    <span className="text-xs text-muted-foreground">
-                      {t("或按 Ctrl+N 添加项目")}
-                    </span>
-                  </EmptyContent>
-                  <div className="steps">
-                    {[
-                      [
-                        "01",
-                        t("选择本地项目"),
-                        t("项目与 Git worktree 分别管理"),
-                      ],
-                      [
-                        "02",
-                        t("建立代码索引"),
-                        t("使用本机已安装的 CodeGraph"),
-                      ],
-                      [
-                        "03",
-                        t("接入 AI 客户端"),
-                        t("同一项目，共用一个受管实例"),
-                      ],
-                    ].map(([n, t, d]) => (
-                      <div key={n}>
-                        <span className="mono text-primary text-xs">{n}</span>
-                        <h3 className="font-medium my-2">{t}</h3>
-                        <p className="text-xs text-muted-foreground">{d}</p>
-                      </div>
-                    ))}
-                  </div>
-                </Empty>
-              )}
-            </div>
-          )}
+            )}
+          </div>
         </main>
       </div>
       <Dialog
@@ -1116,17 +1219,13 @@ export default function App() {
                       : t("设置")}
             </DialogTitle>
             <DialogDescription>
-              {modal === "settings"
-                ? t("管理本机运行环境与应用偏好")
-                : modal === "remove"
+              {modal === "remove"
+                ? t("运行中的实例将先停止。项目源码、索引与客户端配置会保留。")
+                : modal === "relocate"
                   ? t(
-                      "运行中的实例将先停止。项目源码、索引与客户端配置会保留。",
+                      "项目 ID 保持不变。先停止当前实例，再检测新目录；客户端配置需重新预览。",
                     )
-                  : modal === "relocate"
-                    ? t(
-                        "项目 ID 保持不变。先停止当前实例，再检测新目录；客户端配置需重新预览。",
-                      )
-                    : t("每个项目拥有独立索引、网关和运行实例。")}
+                  : t("每个项目拥有独立索引和运行实例，通过共享网关的项目路由连接。")}
             </DialogDescription>
           </DialogHeader>
           <ErrorNotice error={modalError} />
@@ -1135,6 +1234,7 @@ export default function App() {
               variant="outline"
               onClick={() => {
                 setSelected(duplicateProjectId);
+                navigate("project");
                 setQuery("");
                 setFilter("all");
                 setModal(null);
@@ -1143,61 +1243,7 @@ export default function App() {
               {t("定位已有项目")}
             </Button>
           )}
-          {modal === "settings" ? (
-            desktop && !settings ? (
-              <p role="status" className="text-sm text-muted-foreground">
-                {t("正在读取设置…")}
-              </p>
-            ) : (
-              <SettingsForm
-                settings={settings}
-                environment={environment}
-                busy={busy}
-                detect={async (selectedPath) => {
-                  setBusy(true);
-                  setModalError("");
-                  try {
-                    const detected = await call<Environment>(
-                      selectedPath ? "set_codegraph_entry" : "detect_codegraph",
-                      selectedPath ? { selectedPath } : undefined,
-                    );
-                    setEnvironment(detected);
-                    environmentLoaded.current = true;
-                    if (!detected.available)
-                      throw new Error(
-                        detected.error || t("未找到可用的 CodeGraph"),
-                      );
-                    if (!detected.entry)
-                      throw new Error(t("检测未返回可用入口，请重新检测。"));
-                    await refresh();
-                    setError("");
-                    toast.success(t("CodeGraph 检测成功"));
-                    return detected;
-                  } catch (e) {
-                    setModalError(message(e));
-                    return null;
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-                save={async (action, notify = true) => {
-                  setBusy(true);
-                  setModalError("");
-                  try {
-                    await action();
-                    setError("");
-                    environmentLoaded.current = false;
-                    await refresh();
-                    if (notify) toast.success(t("设置已更新"));
-                  } catch (e) {
-                    setModalError(message(e));
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              />
-            )
-          ) : modal !== "remove" ? (
+          {modal !== "remove" ? (
             <form
               id="project-form"
               onSubmit={(e) => {
@@ -1291,9 +1337,9 @@ export default function App() {
               disabled={busy}
               onClick={() => setModal(null)}
             >
-              {modal === "settings" ? t("完成") : t("取消")}
+              {t("取消")}
             </Button>
-            {modal !== "settings" && (
+            {
               <Button
                 variant={modal === "remove" ? "destructive" : "default"}
                 type={modal === "remove" ? "button" : "submit"}
@@ -1310,7 +1356,7 @@ export default function App() {
                     ? t("添加项目")
                     : t("保存")}
               </Button>
-            )}
+            }
           </DialogFooter>
         </DialogContent>
       </Dialog>

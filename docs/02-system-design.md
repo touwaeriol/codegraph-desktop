@@ -1,6 +1,6 @@
 # 系统设计
 
-状态：0.1.3 协议更新；日期：2026-10-03。客户端采用直接 HTTP，未执行的验收项以验证记录为准。
+状态：0.1.8 共享 HTTP 服务更新；日期：2026-10-04。未执行的验收项以验证记录为准。
 
 ## 1. 架构决策
 
@@ -19,25 +19,26 @@ Tauri 使用系统 WebView 承载界面，通过受约束的 IPC 调用 Rust。[
 
 直接在两个客户端中配置 `codegraph serve --mcp` 会分别启动服务，桌面软件无法统一控制这些进程。
 
-客户端直接连接项目 HTTP 网关，网关共享唯一的 CodeGraph stdio 上游。项目端口和令牌持久保存，重启无需改写配置，端口占用则拒绝启动而不漂移。
+客户端通过同一个 HTTP 端口的 `/mcp/{projectId}` 连接项目网关；每个项目各自复用一个 CodeGraph stdio 上游。共享端口和各项目令牌持久保存，重启无需改写配置，端口占用则拒绝启动而不漂移。
 
 ### 1.3 进程与连接图
 
 ```mermaid
 flowchart LR
   UI[React 界面] -->|Tauri IPC| M[Rust 项目管理器]
-  M --> GA[项目 A 网关 / 独立端口]
-  M --> GB[项目 B 网关 / 独立端口]
-  AC[项目 A Codex] -->|本机 HTTP MCP| GA
-  AL[项目 A Claude Code] -->|本机 HTTP MCP| GA
+  M --> H[共享 HTTP 服务 / 单一回环端口]
+  H -->|/mcp/A + A Token| GA[项目 A 网关]
+  H -->|/mcp/B + B Token| GB[项目 B 网关]
+  AC[项目 A Codex] -->|本机 HTTP MCP| H
+  AL[项目 A Claude Code] -->|本机 HTTP MCP| H
   GA -->|一个上游 stdio 会话| PA[CodeGraph A 进程树]
   PA --> IA[项目 A/.codegraph]
-  BC[项目 B 客户端] -->|本机 HTTP MCP| GB
+  BC[项目 B 客户端] -->|本机 HTTP MCP| H
   GB --> PB[CodeGraph B 进程树]
   PB --> IB[项目 B/.codegraph]
 ```
 
-两个网关可以运行在同一个 Rust 主进程中，但分别绑定独立端口并持有独立的状态与上游连接。主进程退出会影响全部项目，这是首版的明确边界。
+共享服务在首个项目启动时绑定，保留至应用退出。项目网关持有独立状态、会话管理器与上游连接；单项目停止只注销其路由。主进程退出会影响全部项目，不是独立于 Desktop 的系统服务。
 
 ## 2. 项目身份与隔离
 
@@ -77,14 +78,14 @@ stateDiagram-v2
 
 1. 获取项目操作锁，验证目录、CLI 入口和索引。
 2. 缺少索引则返回 `INDEX_REQUIRED`，由 UI 提供初始化操作，不偷偷开展长时间扫描。
-3. 实际绑定项目回环端口，持有 listener，避免“先探测空闲再绑定”的竞争。
+3. 获取共享服务锁，首次启动时实际绑定持久端口并持有 listener；占用则报错，不另选端口。
 4. 创建本次实例 `generation`，读取项目持久令牌；状态进入 Starting，尚不发布可连接记录。
 5. 用参数数组启动 CodeGraph，设置工作目录和进程树归属。
 6. 建立上游 stdio MCP 会话，完成 initialize、initialized 与 tools/list。
 7. 校验工具 schema 与允许清单后启用网关。
 8. 原子发布运行记录并推送 Running 事件。
 
-任一步失败都回收 listener、会话和已创建进程树；保留脱敏错误。点击两次启动不能产生两个实例。
+任一步失败都回收该项目会话和已创建进程树；共享 listener 留给其他项目。保留脱敏错误，点击两次启动不能产生两个实例。
 
 启动命令示意：
 
@@ -100,7 +101,7 @@ Windows 的 npm `.cmd` 启动包装不能按普通可执行文件盲目 spawn。
 - 通知当前会话服务停止；在途查询给出明确失败，不无限等待。
 - 先关闭上游输入并等待宽限期，超时终止本项目所属进程树。
 - Windows 使用 Job Object 管理进程树，异常退出时也能清理；不按进程名杀进程。
-- 只有确认退出且端口释放才报告 Stopped；失败时保留 Error 和诊断。
+- 只有确认项目进程退出且项目路由撤销才报告 Stopped；共享端口继续监听，应用退出时释放。失败时保留 Error 和诊断。
 - 重启是停止成功后再启动，generation 重新生成，端口与令牌保持稳定。
 - 首版异常退出不无限自动重启，由用户重试。
 
@@ -144,7 +145,7 @@ CodeGraph 自身可能包含 daemon、watcher 和子进程。必须在技术验�
 
 ### 4.3 端口和鉴权
 
-- 首次从操作系统选择空闲端口并持久保存，重启使用固定端口，占用时报错，不自动切换。
+- 应用首次从操作系统选择一个空闲端口并持久保存，所有项目共享；重启使用固定端口，占用时报错，不自动切换。
 - 项目配置包含本机 URL 和鉴权头，客户端直接连接；不写入用户全局 MCP 配置。
 - 每项目持久保存随机 bearer token，重启不轮换；旧实例 session ID 仍失效。
 - 运行记录包含 projectId、generation、ownerPid、endpoint、token、启动时间；日志和 UI 默认不输出 token。
@@ -227,7 +228,7 @@ Codex：
 
 ```toml
 [mcp_servers.codegraph]
-url = 'http://127.0.0.1:43123/mcp'
+url = 'http://127.0.0.1:43123/mcp/<项目UUID>'
 http_headers = { Authorization = 'Bearer <项目私有令牌>' }
 startup_timeout_sec = 30
 tool_timeout_sec = 120
@@ -240,7 +241,7 @@ Claude Code：
   "mcpServers": {
     "codegraph": {
       "type": "http",
-      "url": "http://127.0.0.1:43123/mcp",
+      "url": "http://127.0.0.1:43123/mcp/<项目UUID>",
       "headers": { "Authorization": "Bearer <项目私有令牌>" }
     }
   }
@@ -250,6 +251,8 @@ Claude Code：
 项目 ID 使用完整 UUID，HTTP 地址和令牌在本地数据库中与其绑定；项目配置内使用固定服务名 `codegraph`。若已有同名条目，展示替换差异由用户确认。CLI 会话仍需完成各自信任/审批流程。[Codex 配置](https://developers.openai.com/codex/mcp/) · [Claude Code 配置](https://code.claude.com/docs/en/mcp)
 
 ### 6.1 安全合并与恢复
+
+0.1.8 启动时自动迁移旧受管 HTTP 地址：只处理数据库中登记、当前条目指纹及旧 URL/Token 均匹配的配置，保留其他字段，先备份再写入。未知或手改条目保留，由用户预览后配置；不会为未配置客户端新增文件，也不修改全局配置。
 
 1. 读取已有文件并解析；非法 TOML/JSON、编码不支持或符号链接目标越出项目时中止写入。
 2. TOML 使用 `toml_edit` 保留注释和无关布局；JSON 使用结构编辑保留无关键值，可统一缩进，预览中说明。

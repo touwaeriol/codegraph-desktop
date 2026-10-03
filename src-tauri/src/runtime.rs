@@ -107,13 +107,24 @@ pub async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result
     s.error = None;
     s.index_state = "ready".into();
     state.publish(app, s.clone());
-    let gateway = project_gateway::Gateway::start(project_gateway::GatewayOptions {
-        project_id: id.into(),
-        root: p.canonical_path.into(),
-        entry,
-        preferred_port: Some(binding.port),
-        persistent_token: Some(binding.token),
-    })
+    let mut host = state.http_host.lock().await;
+    if host.is_none() {
+        *host = Some(
+            project_gateway::SharedGateway::start(binding.port)
+                .await
+                .map_err(|e| AppError::new("PORT_BIND_FAILED", e))?,
+        );
+    }
+    let gateway = project_gateway::Gateway::start_shared(
+        project_gateway::GatewayOptions {
+            project_id: id.into(),
+            root: p.canonical_path.into(),
+            entry,
+            preferred_port: Some(binding.port),
+            persistent_token: Some(binding.token),
+        },
+        host.as_ref().unwrap(),
+    )
     .await
     .map_err(|e| {
         let port_busy = e.to_string().starts_with("PORT_BIND_FAILED")
@@ -131,11 +142,12 @@ pub async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result
             e,
         )
     })?;
+    drop(host);
     let record = project_protocol::RuntimeRecord {
         project_id: id.into(),
         generation: gateway.generation().into(),
         owner_pid: std::process::id(),
-        endpoint: format!("http://127.0.0.1:{}/mcp", gateway.port()),
+        endpoint: gateway.endpoint(),
         token: gateway.token().into(),
         started_at: now(),
     };

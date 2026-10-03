@@ -535,14 +535,14 @@ export function ProjectTools({
           <CardHeader>
             <CardTitle className="text-sm">{t("连接路径")}</CardTitle>
             <CardDescription>
-              {t("客户端 HTTP → 当前项目网关 → CodeGraph")}
+              {t("客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph")}
             </CardDescription>
           </CardHeader>
           <CardContent>
             {snapshot?.state === "running" && snapshot.port && (
               <p className="mono text-xs mb-3 break-all">
                 {t("当前服务地址：http://127.0.0.1:")}
-                {snapshot.port}/mcp
+                {snapshot.port}/mcp/{project.id}
               </p>
             )}
             <p className="text-xs text-muted-foreground leading-6">
@@ -552,7 +552,7 @@ export function ProjectTools({
             </p>
             <p className="text-xs text-muted-foreground leading-6 mt-2">
               {t(
-                "项目使用固定本机端口，重启后地址保持不变；端口被占用时启动会报错，不会自动切换端口。配置中的地址与鉴权信息属于本机项目，请勿公开分享。",
+                "所有项目共用一个固定本机端口，通过 /mcp/项目ID 路由分别连接；每个项目的令牌与会话独立隔离。重启后地址保持不变，端口冲突会报错，不会自动切换。配置含项目鉴权信息，请勿公开分享。",
               )}
             </p>
             <Alert className="mt-4">
@@ -580,7 +580,7 @@ export function ProjectTools({
                   void navigator.clipboard
                     .writeText(
                       t(
-                        "在 CodeGraph Desktop 添加项目，初始化索引并启动实例；在 MCP 配置页预览并应用直接 HTTP 配置，然后在 Codex / Claude Code 信任项目并批准 MCP。已有配置需要重新预览应用以迁移。客户端 HTTP → 当前项目网关 → CodeGraph。项目使用固定本机端口，重启保持地址；端口冲突会报错，不会自动切换。实例停止或桌面应用退出后服务不可用。配置含本机项目鉴权信息，请勿公开分享。",
+                        "在 CodeGraph Desktop 添加项目，初始化索引并启动实例；在 MCP 配置页预览并应用直接 HTTP 配置，然后在 Codex / Claude Code 信任项目并批准 MCP。已有配置需要重新预览应用以迁移。客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph。所有项目共用固定本机端口，由 /mcp/项目ID 区分项目，令牌与会话独立隔离。重启保持地址；端口冲突会报错，不会自动切换。实例停止或桌面应用退出后服务不可用。配置含本机项目鉴权信息，请勿公开分享。",
                       ),
                     )
                     .then(() => toast.success(t("接入说明已复制")))

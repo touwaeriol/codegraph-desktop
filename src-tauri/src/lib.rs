@@ -1,6 +1,7 @@
 mod commands;
 mod configuration;
 mod discovery;
+mod http_migration;
 mod i18n;
 mod lifecycle;
 mod models;
@@ -22,6 +23,7 @@ pub struct AppState {
     data: PathBuf,
     snapshots: Mutex<HashMap<String, RuntimeSnapshot>>,
     gateways: tokio::sync::Mutex<HashMap<String, project_gateway::Gateway>>,
+    http_host: tokio::sync::Mutex<Option<project_gateway::SharedGateway>>,
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     previews: Mutex<HashMap<String, configuration::ConfigPreview>>,
     tasks: Arc<lifecycle::TaskRegistry>,
@@ -256,6 +258,9 @@ fn shutdown(app: tauri::AppHandle) {
                 Err(_) => clean = false,
             }
         }
+        if let Some(host) = state.http_host.lock().await.take() {
+            clean &= host.stop().await.is_ok();
+        }
         let _aborted_tasks = report.aborted;
         state.exit_ready.store(true, Ordering::SeqCst);
         app.exit(if clean { 0 } else { 1 });
@@ -307,13 +312,16 @@ pub fn run() {
             let data = app.path().app_data_dir()?;
             configuration::private_dir(&data).map_err(|e| std::io::Error::other(e.message))?;
             configuration::mark_interrupted(&data).map_err(|e| std::io::Error::other(e.message))?;
-            let db = persistence::open(&data).map_err(|e| std::io::Error::other(e.message))?;
+            let mut db = persistence::open(&data).map_err(|e| std::io::Error::other(e.message))?;
             i18n::set(&persistence::language(&db).map_err(|e| std::io::Error::other(e.message))?);
+            let migration_notes = http_migration::migrate(&mut db, &data)
+                .map_err(|e| std::io::Error::other(e.message))?;
             app.manage(AppState {
                 db: Mutex::new(db),
                 data,
                 snapshots: Mutex::new(HashMap::new()),
                 gateways: Default::default(),
+                http_host: Default::default(),
                 locks: Default::default(),
                 previews: Default::default(),
                 tasks: Default::default(),
@@ -324,6 +332,9 @@ pub fn run() {
                 exit_ready: AtomicBool::new(false),
                 active_indexes: AtomicUsize::new(0),
             });
+            for note in migration_notes {
+                eprintln!("HTTP configuration migration: {note}");
+            }
             #[cfg(unix)]
             install_shutdown_signals(app.handle().clone());
             if UPDATE_SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {

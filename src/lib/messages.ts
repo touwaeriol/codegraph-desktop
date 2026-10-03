@@ -1,5 +1,6 @@
 // Chinese source messages are typed keys. Raw project and upstream text never passes through this catalog.
 export const english = {
+  返回项目: "Back to projects",
   "CodeGraph 检测成功": "CodeGraph detected successfully",
   "实际入口：{0}": "Resolved entry: {0}",
   "检测未返回可用入口，请重新检测。":
@@ -93,7 +94,7 @@ export const english = {
   "MCP 配置": "MCP configuration",
   运行日志: "Logs",
   实例: "Instance",
-  当前项目独立的进程与网关: "A dedicated process and gateway for this project",
+  当前项目独立的进程与共享网关路由: "A dedicated process and shared gateway route for this project",
   刷新状态: "Refresh status",
   运行状态: "Runtime state",
   本机端口: "Local port",
@@ -148,8 +149,8 @@ export const english = {
     "The running instance will stop first. Source files, indexes, and client configurations are retained.",
   "项目 ID 保持不变。先停止当前实例，再检测新目录；客户端配置需重新预览。":
     "The project ID stays the same. Stop the instance, then check the new folder. Preview client configuration again afterward.",
-  "每个项目拥有独立索引、网关和运行实例。":
-    "Each project has its own index, gateway, and instance.",
+  "每个项目拥有独立索引和运行实例，通过共享网关的项目路由连接。":
+    "Each project has its own index and instance, connected through a project route on the shared gateway.",
   定位已有项目: "Go to existing project",
   设置已更新: "Settings updated",
   项目目录: "Project folder",
@@ -213,19 +214,19 @@ export const english = {
   "；尚未获取按客户端分类的会话信息。":
     ". Session details by client are not available.",
   连接路径: "Connection path",
-  "客户端 HTTP → 当前项目网关 → CodeGraph":
-    "Client HTTP → Project gateway → CodeGraph",
+  "客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph":
+    "Client HTTP → Shared gateway → Project route → CodeGraph",
   "当前服务地址：http://127.0.0.1:": "Current endpoint: http://127.0.0.1:",
   "请先在 CodeGraph Desktop 启动当前项目；实例停止或桌面应用退出后，HTTP 服务不可用。客户端可能要求信任项目或批准 MCP；写入后请重新加载客户端。独立测试通过不表示真实客户端已连接。":
     "Start this project in CodeGraph Desktop first. HTTP is unavailable when the instance stops or the app quits. Clients may require project trust or MCP approval; reload them after writing configuration. An independent test does not confirm an actual client connection.",
-  "项目使用固定本机端口，重启后地址保持不变；端口被占用时启动会报错，不会自动切换端口。配置中的地址与鉴权信息属于本机项目，请勿公开分享。":
-    "The project uses a fixed local port, so its address remains stable across restarts. A port conflict causes startup to fail rather than changing ports. The address and credentials belong to this local project; do not share them publicly.",
+  "所有项目共用一个固定本机端口，通过 /mcp/项目ID 路由分别连接；每个项目的令牌与会话独立隔离。重启后地址保持不变，端口冲突会报错，不会自动切换。配置含项目鉴权信息，请勿公开分享。":
+    "All projects share one fixed local port and connect through separate /mcp/project-ID routes. Tokens and sessions remain isolated per project. Addresses stay stable across restarts; port conflicts cause an error rather than a port change. Configuration contains project credentials; do not share it publicly.",
   迁移已有客户端配置: "Migrate existing client configuration",
   "之前生成的配置需要重新点击“预览并配置”，核对后应用，才能迁移为直接 HTTP 连接。":
     "To migrate earlier configurations to direct HTTP, choose Preview configuration, review the changes, and apply them.",
   预览移除受管配置: "Preview removal of managed configuration",
-  "在 CodeGraph Desktop 添加项目，初始化索引并启动实例；在 MCP 配置页预览并应用直接 HTTP 配置，然后在 Codex / Claude Code 信任项目并批准 MCP。已有配置需要重新预览应用以迁移。客户端 HTTP → 当前项目网关 → CodeGraph。项目使用固定本机端口，重启保持地址；端口冲突会报错，不会自动切换。实例停止或桌面应用退出后服务不可用。配置含本机项目鉴权信息，请勿公开分享。":
-    "Add a project in CodeGraph Desktop, initialize its index, and start the instance. Preview and apply direct HTTP configuration, then trust the project and approve MCP in Codex / Claude Code. Preview and apply again to migrate earlier configuration. Client HTTP → Project gateway → CodeGraph. The fixed local port survives restarts; conflicts cause an error instead of a port change. The service stops when the instance or desktop app stops. Configuration contains local credentials; do not share it publicly.",
+  "在 CodeGraph Desktop 添加项目，初始化索引并启动实例；在 MCP 配置页预览并应用直接 HTTP 配置，然后在 Codex / Claude Code 信任项目并批准 MCP。已有配置需要重新预览应用以迁移。客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph。所有项目共用固定本机端口，由 /mcp/项目ID 区分项目，令牌与会话独立隔离。重启保持地址；端口冲突会报错，不会自动切换。实例停止或桌面应用退出后服务不可用。配置含本机项目鉴权信息，请勿公开分享。":
+    "Add a project in CodeGraph Desktop, initialize its index, and start the instance. Preview and apply direct HTTP configuration, then trust the project and approve MCP in Codex / Claude Code. Preview and apply again to migrate earlier configuration. Client HTTP → Shared gateway → Project route → CodeGraph. All projects share a fixed local port with separate /mcp/project-ID routes and isolated tokens and sessions. Addresses survive restarts; conflicts cause an error instead of a port change. The service stops when the instance or desktop app stops. Configuration contains local credentials; do not share it publicly.",
   接入说明已复制: "Connection instructions copied",
   复制接入说明: "Copy connection instructions",
   "独立 MCP 测试": "Independent MCP test: ",
