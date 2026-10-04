@@ -1,5 +1,22 @@
 // Chinese source messages are typed keys. Raw project and upstream text never passes through this catalog.
 export const english = {
+  运行环境: "Runtime engines",
+  通用偏好: "General preferences",
+  "两个独立引擎，可分别配置和运行。":
+    "Configure and run each engine independently.",
+  安装说明: "Installation guide",
+  运行实例: "Runtime instance",
+  当前项目: "Current project",
+  单项目模式: "Single-project mode",
+  运行模式: "Project mode",
+  连接协议: "Transport",
+  项目配置: "Project configuration",
+  "{0} 个工具": "{0} tools",
+  "{0} 个会话": "{0} sessions",
+  "为当前项目配置 {0} 的 MCP 连接。":
+    "Configure {0} MCP connections for this project.",
+  "首次启动可能需要准备语言服务器，可在运行日志中查看进度。":
+    "First startup may prepare language servers. Follow progress in Logs.",
   "启动全部 CodeGraph": "Start all CodeGraph instances",
   项目引擎: "Project engines",
   代码图谱与关系检索: "Code graph & relationships",

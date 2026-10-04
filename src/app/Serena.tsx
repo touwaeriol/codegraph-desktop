@@ -1,15 +1,6 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import {
-  Code2,
-  Copy,
-  Loader2,
-  Play,
-  RefreshCw,
-  Square,
-  ArrowRight,
-  CheckCircle2,
-} from "lucide-react";
+import { Code2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +15,12 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { call, desktop, message } from "@/lib/ipc";
+import {
+  EngineRuntimeCard,
+  EngineConnectionCard,
+  EngineSettingsCard,
+  Metric,
+} from "./EngineOverview";
 import { t, useLanguage } from "@/lib/i18n";
 import type { Environment, SerenaSnapshot } from "@/lib/types";
 
@@ -45,32 +42,27 @@ export function useSerena(projectId: string) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [operation, setOperation] = useState<string | null>(null);
+  const refresh = useCallback(async () => {
+    try {
+      const data = await call<Record<string, SerenaSnapshot>>(
+        "list_serena_snapshots",
+      );
+      setSnapshots(data);
+    } catch (e) {
+      setError(message(e));
+    }
+  }, []);
   useEffect(() => {
-    let active = true;
     setError("");
     setOperation(null);
     setPending(false);
     if (!projectId || !desktop) return;
-    const refresh = async () => {
-      try {
-        const data = await call<Record<string, SerenaSnapshot>>(
-          "list_serena_snapshots",
-        );
-        if (active) {
-          setSnapshots(data);
-          setError("");
-        }
-      } catch (e) {
-        if (active) setError(message(e));
-      }
-    };
     void refresh();
     const timer = setInterval(() => void refresh(), 2000);
     return () => {
-      active = false;
       clearInterval(timer);
     };
-  }, [projectId]);
+  }, [projectId, refresh]);
   useEffect(() => {
     if (!operation) return;
     let active = true;
@@ -124,6 +116,7 @@ export function useSerena(projectId: string) {
   return {
     snapshot,
     snapshots,
+    refresh,
     error,
     busy: pending || !!operation,
     run,
@@ -142,159 +135,73 @@ export function SerenaPanel({
   settings: () => void;
   configure: () => void;
 }) {
-  const language = useLanguage();
-  const { snapshot: s, busy, error, run } = runtime;
-  const running = s.state === "running";
-  const labels = {
-    running: t("运行中"),
-    stopped: t("已停止"),
-    starting: t("启动中"),
-    stopping: t("停止中"),
-    error: t("运行错误"),
-  };
+  useLanguage();
+  const { snapshot: s, error } = runtime;
   return (
-    <div className="space-y-5" data-testid="serena-panel">
+    <div className="panel-grid engine-overview" data-testid="serena-panel">
       {(error || s.error) && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="col-span-full">
           <AlertDescription>{error || s.error?.message}</AlertDescription>
         </Alert>
       )}
-      <Card className="engine-detail">
-        <CardHeader className="flex flex-row items-start justify-between gap-4 flex-wrap">
-          <div className="flex gap-3">
-            <span className="engine-symbol serena">
-              <Code2 size={23} />
-            </span>
-            <div>
-              <CardTitle>Serena</CardTitle>
-              <CardDescription className="mt-2">
-                {t("符号搜索、引用分析与语义编辑")}
-              </CardDescription>
-            </div>
-          </div>
-          <Badge variant="secondary">
-            {running && <CheckCircle2 size={12} />} {labels[s.state]}
-          </Badge>
+      <EngineRuntimeCard
+        name="Serena"
+        state={s.state}
+        pid={s.pid}
+        port={s.endpoint ? new URL(s.endpoint).port : null}
+        startedAt={s.startedAt}
+        detail={{
+          name: t("可用工具"),
+          value: s.state === "running" ? s.tools.length : "—",
+        }}
+        onRefresh={() => void runtime.refresh()}
+        busy={runtime.busy}
+      />
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Code2 size={17} />
+            {t("语义代码工具")}
+          </CardTitle>
+          <CardDescription>{t("符号搜索、引用分析与语义编辑")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="toolbar">
-            {busy ? (
-              <Button
-                variant="outline"
-                onClick={() =>
-                  void runtime.cancel().catch((e) => toast.error(message(e)))
-                }
-              >
-                <Loader2 className="animate-spin" />
-                {t("取消任务")}
-              </Button>
-            ) : (
-              <>
-                <Button
-                  disabled={!desktop}
-                  onClick={() => void run(running ? "stop" : "start")}
-                >
-                  {running ? <Square /> : <Play />}
-                  {running ? t("停止 Serena") : t("启动 Serena")}
-                </Button>
-                {running && (
-                  <Button variant="outline" onClick={() => void run("restart")}>
-                    <RefreshCw />
-                    {t("重启")}
-                  </Button>
-                )}
-              </>
-            )}
-            <Button variant="ghost" onClick={settings}>
-              {t("配置运行环境")}
-            </Button>
+          <div className="metrics">
+            <Metric name={t("运行模式")} value={t("单项目模式")} />
+            <Metric name={t("连接协议")} value="Streamable HTTP" />
+            <Metric
+              name={t("可用工具")}
+              value={s.state === "running" ? s.tools.length : "—"}
+            />
+            <Metric name={t("项目配置")} value=".serena/project.yml" />
           </div>
-          <div className="serena-metrics">
-            <div>
-              <div className="metric-label">{t("进程 PID")}</div>
-              <strong>{s.pid ?? "—"}</strong>
-            </div>
-            <div>
-              <div className="metric-label">{t("可用工具")}</div>
-              <strong>{running ? s.tools.length : "—"}</strong>
-            </div>
-            <div>
-              <div className="metric-label">{t("最近启动")}</div>
-              <span>
-                {s.startedAt
-                  ? new Date(s.startedAt).toLocaleString(language)
-                  : "—"}
-              </span>
-            </div>
-          </div>
-          {s.endpoint && (
-            <div className="endpoint-line">
-              <code>{s.endpoint}</code>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={t("复制服务地址")}
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(s.endpoint!)
-                    .then(() => toast.success(t("已复制")))
-                    .catch((e) => toast.error(message(e)))
-                }
-              >
-                <Copy size={14} />
-              </Button>
-            </div>
-          )}
-          <p className="text-sm text-muted-foreground leading-6">
-            {t(
-              "Serena 使用独立的原生 HTTP 服务与单项目模式。首次启动可能需要准备语言服务器，可在运行日志中查看进度。",
-            )}
-          </p>
-          {running && (
+          {s.tools.length > 0 && (
             <details>
-              <summary className="cursor-pointer text-sm text-primary">
+              <summary className="text-primary text-sm cursor-pointer">
                 {t("查看可用工具")}
               </summary>
               <div className="flex flex-wrap gap-2 mt-3">
                 {s.tools.map((tool) => (
-                  <Badge key={tool} variant="secondary" className="mono">
+                  <Badge variant="secondary" className="mono" key={tool}>
                     {tool}
                   </Badge>
                 ))}
               </div>
             </details>
           )}
+          <p className="text-xs text-muted-foreground leading-6">
+            {t("首次启动可能需要准备语言服务器，可在运行日志中查看进度。")}
+          </p>
+          <Button variant="outline" onClick={settings}>
+            {t("配置运行环境")}
+          </Button>
         </CardContent>
       </Card>
-      <div className="panel-grid">
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("语义代码工具")}</CardTitle>
-            <CardDescription>
-              {t("按符号理解和修改代码，与 CodeGraph 的图谱检索互补。")}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground leading-6">
-            {t(
-              "无需先初始化 CodeGraph 索引。Serena 按项目语言启动语言服务器，并维护自己的 .serena 项目配置。",
-            )}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("客户端接入")}</CardTitle>
-            <CardDescription>
-              {t("为当前项目添加独立的 serena MCP 条目。")}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button variant="outline" onClick={configure}>
-              {t("配置客户端")}
-              <ArrowRight />
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
+      <EngineConnectionCard
+        name="Serena"
+        configure={configure}
+        endpoint={s.endpoint}
+      />
     </div>
   );
 }
@@ -324,62 +231,79 @@ export function SerenaSettings({ entry: initial }: { entry?: string | null }) {
     }
   }
   return (
-    <Field className="settings-engine" data-testid="serena-settings">
-      <FieldLabel htmlFor="serena-entry">{t("Serena 入口")}</FieldLabel>
-      <p className="text-xs text-muted-foreground">
-        {t("可选引擎 · 符号搜索与语义编辑")}
-      </p>
-      <Input
-        id="serena-entry"
-        value={entry}
-        onChange={(e) => setEntry(e.target.value)}
-        placeholder={t("自动检测或选择可执行入口")}
-      />
-      <div className="toolbar">
-        <Button
-          variant="outline"
-          disabled={busy || !desktop}
-          onClick={() =>
-            void open({ multiple: false, directory: false })
-              .then((path) => {
-                if (typeof path === "string") setEntry(path);
-              })
-              .catch((e) => setError(message(e)))
-          }
-        >
-          {t("选择文件")}
-        </Button>
-        <Button
-          variant="outline"
-          disabled={busy || !desktop}
-          onClick={() => void detect()}
-        >
-          {busy ? <Loader2 className="animate-spin" /> : null}
-          {t("检测 Serena 并使用")}
-        </Button>
-      </div>
-      {error && (
-        <p role="alert" className="text-destructive text-sm break-all">
-          {error}
+    <EngineSettingsCard
+      name="Serena"
+      description={t("符号搜索与语义编辑")}
+      testId="serena-settings"
+    >
+      <Field>
+        <FieldLabel htmlFor="serena-entry">{t("Serena 入口")}</FieldLabel>
+        <Input
+          id="serena-entry"
+          value={entry}
+          onChange={(e) => setEntry(e.target.value)}
+          placeholder={t("自动检测或选择可执行入口")}
+        />
+        <div className="toolbar">
+          <Button
+            variant="outline"
+            disabled={busy || !desktop}
+            onClick={() =>
+              void open({ multiple: false, directory: false })
+                .then((path) => {
+                  if (typeof path === "string") setEntry(path);
+                })
+                .catch((e) => setError(message(e)))
+            }
+          >
+            {t("选择文件")}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={busy || !desktop}
+            aria-label={t("检测 Serena 并使用")}
+            onClick={() => void detect()}
+          >
+            {busy ? <Loader2 className="animate-spin" /> : null}
+            {t("检测并使用")}
+          </Button>
+        </div>
+        {error && (
+          <p role="alert" className="text-destructive text-sm break-all">
+            {error}
+          </p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          {environment?.available
+            ? t("已检测：{0}", { 0: environment.version ?? t("版本未提供") })
+            : t("尚未检测")}
+          {t("。更换入口后，运行实例需重启生效。")}
         </p>
-      )}
-      {environment?.available && (
-        <p className="text-primary text-sm">{environment.version}</p>
-      )}
-      <p className="text-xs text-muted-foreground">
-        {t("安装 uv 后执行以下命令，然后检测入口。更换入口后需重启 Serena。")}
-      </p>
-      <code className="install-command">
-        uv tool install -p 3.13 serena-agent
-      </code>
-      <a
-        href="https://oraios.github.io/serena/02-usage/010_installation.html"
-        target="_blank"
-        rel="noreferrer"
-        className="text-primary text-sm underline"
-      >
-        {t("Serena 官方安装说明 ↗")}
-      </a>
-    </Field>
+        {environment?.available && environment.entry && (
+          <p className="mono text-xs break-all">
+            {t("实际入口：{0}", { 0: environment.entry })}
+          </p>
+        )}
+        <details className="engine-install">
+          <summary>{t("安装说明")}</summary>
+          <p className="text-xs text-muted-foreground">
+            {t(
+              "安装 uv 后执行以下命令，然后检测入口。更换入口后需重启 Serena。",
+            )}
+          </p>
+          <code className="install-command">
+            uv tool install -p 3.13 serena-agent
+          </code>
+          <a
+            href="https://oraios.github.io/serena/02-usage/010_installation.html"
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary text-sm underline"
+          >
+            {t("Serena 官方安装说明 ↗")}
+          </a>
+        </details>
+      </Field>
+    </EngineSettingsCard>
   );
 }

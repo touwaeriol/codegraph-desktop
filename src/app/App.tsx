@@ -8,10 +8,7 @@ import {
 } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-  Activity,
-  ArrowRight,
-  CheckCircle2,
-  Circle,
+  Code2,
   Copy,
   Folder,
   FolderOpen,
@@ -23,8 +20,6 @@ import {
   RefreshCw,
   Search,
   Settings2,
-  Square,
-  Terminal,
   TriangleAlert,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
@@ -75,16 +70,16 @@ import type {
 } from "@/lib/types";
 import { SerenaPanel, SerenaSettings, useSerena } from "./Serena";
 import { ProjectTools } from "./ProjectTools";
-import { Elapsed } from "@/components/Elapsed";
+import {
+  EngineStatus as Status,
+  EngineActions,
+  EngineRuntimeCard,
+  EngineConnectionCard,
+  EngineSettingsCard,
+  Metric,
+} from "./EngineOverview";
 import packageInfo from "../../package.json";
 
-const stateNames = () => ({
-  stopped: t("已停止"),
-  starting: t("启动中"),
-  running: t("运行中"),
-  stopping: t("停止中"),
-  error: t("运行错误"),
-});
 const indexNames = () => ({
   unknown: t("尚未检测"),
   missing: t("未初始化"),
@@ -92,25 +87,6 @@ const indexNames = () => ({
   indexing: t("索引处理中"),
   error: t("索引异常"),
 });
-export function Status({ snapshot }: { snapshot?: RuntimeSnapshot }) {
-  return (
-    <Badge
-      variant="secondary"
-      className={snapshot?.state === "running" ? "text-primary bg-accent" : ""}
-    >
-      <span className="status">
-        {snapshot?.state === "running" ? (
-          <CheckCircle2 size={12} />
-        ) : snapshot?.state === "error" ? (
-          <TriangleAlert size={12} />
-        ) : (
-          <Circle size={10} />
-        )}{" "}
-        {snapshot ? stateNames()[snapshot.state] : t("尚未获取")}
-      </span>
-    </Badge>
-  );
-}
 export function ErrorNotice({ error }: { error: string }) {
   return error ? (
     <Alert variant="destructive">
@@ -585,19 +561,17 @@ export default function App() {
                   <Folder size={16} />
                   <span className="truncate">{p.name}</span>
                 </div>
-                <div className="flex flex-wrap gap-1 items-center">
-                  <span className="text-[10px] text-muted-foreground">CG</span>
-                  <Status snapshot={snapshots[p.id]} />
-                  {serena.snapshots[p.id] && (
-                    <>
-                      <span className="text-[10px] text-muted-foreground ml-1">
-                        Serena
-                      </span>
-                      <Badge variant="secondary">
-                        {stateNames()[serena.snapshots[p.id].state]}
-                      </Badge>
-                    </>
-                  )}
+                <div className="sidebar-engine-states">
+                  <div>
+                    <span>CodeGraph</span>
+                    <Status snapshot={snapshots[p.id]} />
+                  </div>
+                  <div>
+                    <span>Serena</span>
+                    <Status
+                      snapshot={serena.snapshots[p.id] ?? { state: "stopped" }}
+                    />
+                  </div>
                 </div>
                 <div
                   className="mono text-[11px] text-muted-foreground truncate mt-2"
@@ -663,7 +637,7 @@ export default function App() {
                 </Button>
               </div>
             </header>
-            <div className="content max-w-3xl space-y-5">
+            <div className="content settings-content space-y-5">
               <ErrorNotice error={settingsError} />
               {desktop && !settings ? (
                 <p role="status" className="text-sm text-muted-foreground">
@@ -804,80 +778,68 @@ export default function App() {
                         </Button>
                       </div>
                     </div>
-                    <div
-                      className="toolbar"
-                      style={
-                        engine === "serena" ? { display: "none" } : undefined
+                    <EngineActions
+                      state={
+                        engine === "serena"
+                          ? serena.snapshot.state
+                          : snapshot?.state
                       }
-                    >
-                      {snapshot?.state === "running" ? (
-                        <>
-                          <Button
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() => void runtime("restart")}
-                          >
-                            <RefreshCw />
-                            {t("重启")}
-                          </Button>
-                          <Button
-                            disabled={busy}
-                            onClick={() => void runtime("stop")}
-                          >
-                            <Square />
-                            {t("停止实例")}
-                          </Button>
-                        </>
-                      ) : snapshot?.state === "starting" ? (
-                        <Button
-                          disabled={busy}
-                          onClick={() => void cancelStartup()}
-                        >
-                          <Loader2 className="animate-spin" />
-                          {t("取消启动")}
-                        </Button>
-                      ) : (
-                        <Button
-                          disabled={
-                            busy ||
-                            !environment?.available ||
-                            snapshot?.state === "stopping"
-                          }
-                          onClick={() =>
-                            snapshot?.indexState === "missing"
-                              ? void indexing("init")
-                              : void runtime("start")
-                          }
-                        >
-                          <Play />
-                          {snapshot?.indexState === "missing"
-                            ? t("初始化索引")
-                            : snapshot?.state === "stopping"
-                              ? t("停止中")
-                              : t("启动实例")}
-                        </Button>
-                      )}
-                    </div>
+                      busy={
+                        engine === "serena"
+                          ? serena.busy && serena.snapshot.state !== "starting"
+                          : busy
+                      }
+                      disabled={
+                        engine === "serena" ? !desktop : !environment?.available
+                      }
+                      startLabel={
+                        engine === "codegraph" &&
+                        snapshot?.indexState === "missing"
+                          ? t("初始化索引")
+                          : undefined
+                      }
+                      onStart={() => {
+                        if (engine === "serena") void serena.run("start");
+                        else if (snapshot?.indexState === "missing")
+                          void indexing("init");
+                        else void runtime("start");
+                      }}
+                      onStop={() => {
+                        if (engine === "serena") void serena.run("stop");
+                        else void runtime("stop");
+                      }}
+                      onRestart={() => {
+                        if (engine === "serena") void serena.run("restart");
+                        else void runtime("restart");
+                      }}
+                      onCancel={() => {
+                        if (engine === "serena")
+                          void serena
+                            .cancel()
+                            .catch((e) => toast.error(message(e)));
+                        else void cancelStartup();
+                      }}
+                    />
                   </div>
-                  <div
-                    className="flex items-center gap-3 mt-3 text-xs text-muted-foreground"
-                    style={
-                      engine === "serena" ? { display: "none" } : undefined
-                    }
-                  >
-                    <Status snapshot={snapshot} />
+                  <div className="engine-header-status">
+                    <span>{engine === "serena" ? "Serena" : "CodeGraph"}</span>
+                    <Status
+                      snapshot={
+                        engine === "serena" ? serena.snapshot : snapshot
+                      }
+                    />
                     <span>
-                      {snapshot
-                        ? indexNames()[snapshot.indexState]
-                        : t("索引尚未获取")}
+                      {engine === "serena"
+                        ? t("单项目模式")
+                        : snapshot
+                          ? indexNames()[snapshot.indexState]
+                          : t("索引尚未获取")}
                     </span>
                     <span>
-                      {snapshot?.sessions ?? "—"}
-                      {t("个会话")}
+                      {engine === "serena"
+                        ? t("{0} 个工具", { 0: serena.snapshot.tools.length })
+                        : t("{0} 个会话", { 0: snapshot?.sessions ?? 0 })}
                     </span>
-                    {project.autoStart && (
-                      <span>{t("应用启动时自动启动")}</span>
-                    )}
                   </div>
                 </header>
                 <div className="content space-y-4">
@@ -928,11 +890,7 @@ export default function App() {
                         <strong>CodeGraph</strong>
                         <small>{t("代码图谱与关系检索")}</small>
                       </span>
-                      <Badge variant="secondary">
-                        {snapshot
-                          ? stateNames()[snapshot.state]
-                          : t("尚未获取")}
-                      </Badge>
+                      <Status snapshot={snapshot} />
                     </button>
                     <button
                       aria-pressed={engine === "serena"}
@@ -941,16 +899,14 @@ export default function App() {
                         changeTab("overview");
                       }}
                     >
-                      <span className="engine-symbol serena">
-                        <Terminal size={20} />
+                      <span className="engine-symbol">
+                        <Code2 size={20} />
                       </span>
                       <span>
                         <strong>Serena</strong>
                         <small>{t("符号搜索与语义编辑")}</small>
                       </span>
-                      <Badge variant="secondary">
-                        {stateNames()[serena.snapshot.state]}
-                      </Badge>
+                      <Status snapshot={serena.snapshot} />
                     </button>
                   </div>
                   <Tabs value={tab} onValueChange={changeTab}>
@@ -967,84 +923,29 @@ export default function App() {
                           configure={() => changeTab("config")}
                         />
                       ) : (
-                        <div className="panel-grid">
-                          <Card>
-                            <CardHeader className="flex flex-row justify-between">
-                              <div>
-                                <CardTitle className="flex items-center gap-2">
-                                  <Activity size={17} />
-                                  CodeGraph
-                                </CardTitle>
-                                <CardDescription className="mt-2">
-                                  {t("当前项目独立的进程与共享网关路由")}
-                                </CardDescription>
-                              </div>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                aria-label={t("刷新状态")}
-                                disabled={busy}
-                                onClick={() =>
-                                  void run(() =>
-                                    call("refresh_index_status", {
-                                      projectId: selected,
-                                    }),
-                                  )
-                                }
-                              >
-                                <RefreshCw size={16} />
-                              </Button>
-                            </CardHeader>
-                            <CardContent>
-                              <div className="metrics">
-                                <Metric
-                                  name={t("运行状态")}
-                                  value={
-                                    snapshot
-                                      ? stateNames()[snapshot.state]
-                                      : t("尚未获取")
-                                  }
-                                />
-                                <Metric
-                                  name={t("本机端口")}
-                                  value={
-                                    snapshot?.port ?? t("尚未获取固定端口")
-                                  }
-                                />
-                                <Metric
-                                  name={t("进程 PID")}
-                                  value={snapshot?.pid ?? "—"}
-                                />
-                                <Metric
-                                  name={t("最近启动")}
-                                  value={
-                                    snapshot?.startedAt
-                                      ? new Date(
-                                          snapshot.startedAt,
-                                        ).toLocaleString(language)
-                                      : "—"
-                                  }
-                                />
-                                <Metric
-                                  name={t("客户端会话")}
-                                  value={snapshot?.sessions ?? t("尚未获取")}
-                                />
-                                {snapshot?.startedAt &&
-                                  snapshot.state === "running" && (
-                                    <div>
-                                      <div className="metric-label">
-                                        {t("运行时长")}
-                                      </div>
-                                      <Elapsed since={snapshot.startedAt} />
-                                    </div>
-                                  )}
-                                <Metric
-                                  name={t("入口版本")}
-                                  value={environment?.version ?? t("尚未获取")}
-                                />
-                              </div>
-                            </CardContent>
-                          </Card>
+                        <div
+                          className="panel-grid engine-overview"
+                          data-testid="codegraph-panel"
+                        >
+                          <EngineRuntimeCard
+                            name="CodeGraph"
+                            state={snapshot?.state}
+                            pid={snapshot?.pid}
+                            port={snapshot?.port}
+                            startedAt={snapshot?.startedAt}
+                            detail={{
+                              name: t("入口版本"),
+                              value: environment?.version ?? "—",
+                            }}
+                            busy={busy}
+                            onRefresh={() =>
+                              void run(() =>
+                                call("refresh_index_status", {
+                                  projectId: selected,
+                                }),
+                              )
+                            }
+                          />
                           <Card>
                             <CardHeader>
                               <CardTitle className="flex items-center gap-2">
@@ -1127,30 +1028,15 @@ export default function App() {
                               </div>
                             </CardContent>
                           </Card>
-                          <Card className="col-span-full">
-                            <CardHeader>
-                              <CardTitle>{t("客户端接入")}</CardTitle>
-                              <CardDescription>
-                                {t(
-                                  "Codex 与 Claude Code 共用当前项目的一个实例",
-                                )}
-                              </CardDescription>
-                            </CardHeader>
-                            <CardContent className="flex justify-between items-center gap-4 flex-wrap">
-                              <p className="text-sm text-muted-foreground">
-                                {t(
-                                  "配置写入、独立连接测试与真实客户端会话分别验证。",
-                                )}
-                              </p>
-                              <Button
-                                variant="outline"
-                                onClick={() => changeTab("config")}
-                              >
-                                {t("配置客户端")}
-                                <ArrowRight />
-                              </Button>
-                            </CardContent>
-                          </Card>
+                          <EngineConnectionCard
+                            name="CodeGraph"
+                            endpoint={
+                              snapshot?.port
+                                ? `http://127.0.0.1:${snapshot.port}/mcp/${project.id}`
+                                : null
+                            }
+                            configure={() => changeTab("config")}
+                          />
                           {project.notes && (
                             <Card className="col-span-full">
                               <CardHeader>
@@ -1496,14 +1382,6 @@ export default function App() {
     </>
   );
 }
-function Metric({ name, value }: { name: string; value: string | number }) {
-  return (
-    <div>
-      <div className="metric-label">{name}</div>
-      <div className="text-sm font-medium break-all">{value}</div>
-    </div>
-  );
-}
 function SettingsForm({
   settings,
   environment,
@@ -1525,139 +1403,182 @@ function SettingsForm({
     [concurrency, setConcurrency] = useState(settings?.indexConcurrency ?? 2),
     [behavior, setBehavior] = useState(settings?.closeBehavior ?? "tray");
   return (
-    <FieldGroup>
-      <Field>
-        <FieldLabel htmlFor="language">{t("界面语言")}</FieldLabel>
-        <select
-          id="language"
-          className="border rounded-md p-2"
-          value={selectedLanguage}
-          onChange={(e) => setSelectedLanguage(e.target.value as Language)}
-        >
-          <option value="zh-CN">简体中文</option>
-          <option value="en">English</option>
-        </select>
-        <p className="text-xs text-muted-foreground">
-          {t("首次启动使用系统语言；手动选择会保存。")}
-        </p>
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="entry">{t("CodeGraph 入口")}</FieldLabel>
-        <Input
-          id="entry"
-          value={entry}
-          onChange={(e) => setEntry(e.target.value)}
-          placeholder={t("自动检测或选择可执行入口")}
-        />
-        <div className="toolbar">
-          <Button
-            variant="outline"
-            disabled={busy || !desktop}
-            onClick={() =>
-              void open({ multiple: false, directory: false }).then((path) => {
-                if (typeof path === "string") setEntry(path);
-              })
-            }
-          >
-            {t("选择文件")}
-          </Button>
-          <Button
-            variant="outline"
-            disabled={busy || !desktop}
-            onClick={() =>
-              void detect(entry.trim()).then((detected) => {
-                if (detected?.entry) setEntry(detected.entry);
-              })
-            }
-          >
-            {t("检测并使用")}
-          </Button>
+    <div className="settings-layout">
+      <section aria-labelledby="runtime-settings-title">
+        <div className="settings-section-heading">
+          <h2 id="runtime-settings-title">{t("运行环境")}</h2>
+          <p>{t("两个独立引擎，可分别配置和运行。")}</p>
         </div>
-        <p className="text-xs text-muted-foreground">
-          {environment?.available
-            ? t("已检测：{0}", { 0: environment.version ?? t("版本未提供") })
-            : (environment?.error ?? t("尚未检测"))}
-          {t("。更换入口后，运行实例需重启生效。")}
-        </p>
-        {environment?.available && environment.entry && (
-          <p className="mono text-xs break-all" data-testid="detected-entry">
-            {t("实际入口：{0}", { 0: environment.entry })}
+        <div className="settings-engines">
+          <EngineSettingsCard
+            name="CodeGraph"
+            description={t("代码图谱与关系检索")}
+            testId="codegraph-settings"
+          >
+            <Field>
+              <FieldLabel htmlFor="entry">{t("CodeGraph 入口")}</FieldLabel>
+              <Input
+                id="entry"
+                value={entry}
+                onChange={(e) => setEntry(e.target.value)}
+                placeholder={t("自动检测或选择可执行入口")}
+              />
+              <div className="toolbar">
+                <Button
+                  variant="outline"
+                  disabled={busy || !desktop}
+                  onClick={() =>
+                    void open({ multiple: false, directory: false }).then(
+                      (path) => {
+                        if (typeof path === "string") setEntry(path);
+                      },
+                    )
+                  }
+                >
+                  {t("选择文件")}
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={busy || !desktop}
+                  onClick={() =>
+                    void detect(entry.trim()).then((detected) => {
+                      if (detected?.entry) setEntry(detected.entry);
+                    })
+                  }
+                >
+                  {t("检测并使用")}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {environment?.available
+                  ? t("已检测：{0}", {
+                      0: environment.version ?? t("版本未提供"),
+                    })
+                  : (environment?.error ?? t("尚未检测"))}
+                {t("。更换入口后，运行实例需重启生效。")}
+              </p>
+              {environment?.available && environment.entry && (
+                <p
+                  className="mono text-xs break-all"
+                  data-testid="detected-entry"
+                >
+                  {t("实际入口：{0}", { 0: environment.entry })}
+                </p>
+              )}
+              {environment?.available && environment.error && (
+                <Alert>
+                  <TriangleAlert />
+                  <AlertTitle>{t("兼容性提示")}</AlertTitle>
+                  <AlertDescription>{environment.error}</AlertDescription>
+                </Alert>
+              )}
+              <details className="engine-install">
+                <summary>{t("安装说明")}</summary>
+                <a
+                  className="text-primary text-sm underline"
+                  href="https://github.com/colbymchenry/codegraph"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {t("CodeGraph 官方项目与安装说明 ↗")}
+                </a>
+              </details>
+            </Field>
+          </EngineSettingsCard>
+          <SerenaSettings entry={settings?.serenaEntry} />
+        </div>
+      </section>
+      <section aria-labelledby="preferences-title">
+        <div className="settings-section-heading">
+          <h2 id="preferences-title">{t("通用偏好")}</h2>
+        </div>
+        <Card>
+          <CardContent className="settings-preferences">
+            <Field>
+              <FieldLabel htmlFor="language">{t("界面语言")}</FieldLabel>
+              <select
+                id="language"
+                className="border rounded-md p-2"
+                value={selectedLanguage}
+                onChange={(e) =>
+                  setSelectedLanguage(e.target.value as Language)
+                }
+              >
+                <option value="zh-CN">简体中文</option>
+                <option value="en">English</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {t("首次启动使用系统语言；手动选择会保存。")}
+              </p>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="concurrency">
+                {t("索引任务并发数")}
+              </FieldLabel>
+              <Input
+                id="concurrency"
+                type="number"
+                min={1}
+                max={4}
+                value={concurrency}
+                onChange={(e) => setConcurrency(Number(e.target.value))}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="close-behavior">
+                {t("关闭窗口行为")}
+              </FieldLabel>
+              <select
+                className="border rounded-md p-2"
+                id="close-behavior"
+                value={behavior}
+                onChange={(e) => setBehavior(e.target.value as "tray" | "exit")}
+              >
+                <option value="tray">{t("隐藏到托盘")}</option>
+                <option value="exit">{t("退出并停止全部实例")}</option>
+              </select>
+            </Field>
+            <Button
+              disabled={busy || !desktop || concurrency < 1 || concurrency > 4}
+              onClick={() =>
+                void save(() =>
+                  call("save_settings", {
+                    indexConcurrency: concurrency,
+                    closeBehavior: behavior,
+                    language: selectedLanguage,
+                  }),
+                )
+              }
+            >
+              {t("保存偏好")}
+            </Button>
+          </CardContent>
+        </Card>
+      </section>
+      <Card>
+        <CardContent>
+          <Field>
+            <FieldLabel>{t("应用数据目录")}</FieldLabel>
+            <p className="mono text-xs break-all text-muted-foreground">
+              {settings?.appDataDir ?? t("桌面启动后可用")}
+            </p>
+            <Button
+              variant="outline"
+              disabled={!desktop}
+              onClick={() =>
+                void save(() => call("open_app_data_directory"), false)
+              }
+            >
+              {t("打开数据目录")}
+            </Button>
+          </Field>
+          <p className="text-xs text-muted-foreground">
+            CodeGraph Desktop {packageInfo.version}
+            <br />
+            {t("完全退出应用会停止受管实例。")}
           </p>
-        )}
-        {environment?.available && environment.error && (
-          <Alert>
-            <TriangleAlert />
-            <AlertTitle>{t("兼容性提示")}</AlertTitle>
-            <AlertDescription>{environment.error}</AlertDescription>
-          </Alert>
-        )}
-      </Field>
-      <SerenaSettings entry={settings?.serenaEntry} />
-      <Field>
-        <FieldLabel htmlFor="concurrency">{t("索引任务并发数")}</FieldLabel>
-        <Input
-          id="concurrency"
-          type="number"
-          min={1}
-          max={4}
-          value={concurrency}
-          onChange={(e) => setConcurrency(Number(e.target.value))}
-        />
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="close-behavior">{t("关闭窗口行为")}</FieldLabel>
-        <select
-          className="border rounded-md p-2"
-          id="close-behavior"
-          value={behavior}
-          onChange={(e) => setBehavior(e.target.value as "tray" | "exit")}
-        >
-          <option value="tray">{t("隐藏到托盘")}</option>
-          <option value="exit">{t("退出并停止全部实例")}</option>
-        </select>
-      </Field>
-      <Button
-        disabled={busy || !desktop || concurrency < 1 || concurrency > 4}
-        onClick={() =>
-          void save(() =>
-            call("save_settings", {
-              indexConcurrency: concurrency,
-              closeBehavior: behavior,
-              language: selectedLanguage,
-            }),
-          )
-        }
-      >
-        {t("保存偏好")}
-      </Button>
-      <Field>
-        <FieldLabel>{t("应用数据目录")}</FieldLabel>
-        <p className="mono text-xs break-all text-muted-foreground">
-          {settings?.appDataDir ?? t("桌面启动后可用")}
-        </p>
-        <Button
-          variant="outline"
-          disabled={!desktop}
-          onClick={() =>
-            void save(() => call("open_app_data_directory"), false)
-          }
-        >
-          {t("打开数据目录")}
-        </Button>
-      </Field>
-      <p className="text-xs text-muted-foreground">
-        {t("CodeGraph Desktop {0} · 开发构建", { 0: packageInfo.version })}
-        <br />
-        {t("完全退出应用会停止受管实例。")}
-      </p>
-      <a
-        className="text-primary text-sm underline"
-        href="https://github.com/colbymchenry/codegraph"
-        target="_blank"
-        rel="noreferrer"
-      >
-        {t("CodeGraph 官方项目与安装说明 ↗")}
-      </a>
-    </FieldGroup>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

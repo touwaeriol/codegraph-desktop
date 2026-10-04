@@ -110,6 +110,65 @@ pre,
 .main {
   min-width: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
+}
+.project-header .min-w-0 {
+  max-width: 100%;
+}
+.settings-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.settings-section-heading {
+  margin-bottom: 14px;
+}
+.settings-section-heading h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.settings-section-heading p {
+  margin-top: 5px;
+  font-size: 12px;
+  color: #5d6876;
+}
+.settings-engines {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 18px;
+  align-items: stretch;
+}
+.engine-settings-card {
+  min-width: 0;
+}
+.engine-settings-card [data-slot="card-header"] {
+  min-height: 48px;
+}
+.engine-settings-card [data-slot="field"] {
+  min-width: 0;
+}
+.engine-settings-card p {
+  overflow-wrap: anywhere;
+}
+.engine-install {
+  color: #5d6876;
+  font-size: 12px;
+}
+.engine-install summary {
+  cursor: pointer;
+  color: #176b52;
+}
+.engine-install > :not(summary) {
+  margin-top: 12px;
+}
+.settings-preferences {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 24px;
+}
+.settings-preferences > button {
+  grid-column: 1 / -1;
+  justify-self: start;
 }
 .project-header {
   padding: 25px 28px 20px;
@@ -120,6 +179,37 @@ pre,
   padding: 24px 28px;
   max-width: 1400px;
   margin: 0 auto;
+}
+.engine-header-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-height: 24px;
+  margin-top: 12px;
+  color: #5d6876;
+  font-size: 12px;
+}
+.sidebar-engine-states {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.sidebar-engine-states > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.sidebar-engine-states > div > span:first-child {
+  font-size: 11px;
+  color: #5d6876;
+}
+.engine-overview > [data-slot="card"]:not(.col-span-full) {
+  min-height: 360px;
+}
+.engine-overview .metrics {
+  row-gap: 24px;
 }
 .engine-picker {
   display: grid;
@@ -137,9 +227,6 @@ pre,
   text-align: left;
   background: white;
   min-width: 0;
-  transition:
-    border-color 0.15s,
-    box-shadow 0.15s;
 }
 .engine-picker > button[aria-pressed="true"] {
   border-color: var(--primary);
@@ -168,17 +255,6 @@ pre,
   background: #eaf5ef;
   flex-shrink: 0;
 }
-.engine-symbol.serena {
-  color: #5b4ab2;
-  background: #f0edfb;
-}
-.serena-metrics {
-  display: grid;
-  grid-template-columns: 1fr 1fr 2fr;
-  gap: 20px;
-  padding: 18px 0;
-  border-block: 1px solid #edf0f4;
-}
 .endpoint-line {
   display: flex;
   align-items: center;
@@ -192,12 +268,6 @@ pre,
 .endpoint-line code {
   overflow-wrap: anywhere;
   font-size: 12px;
-}
-.settings-engine {
-  background: #faf9fe;
-  border: 1px solid #e5def7;
-  padding: 20px;
-  border-radius: 12px;
 }
 .install-command {
   display: block;
@@ -215,9 +285,6 @@ pre,
   }
   .engine-picker small {
     font-size: 11px;
-  }
-  .serena-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 .panel-grid {
@@ -296,6 +363,9 @@ pre,
   .panel-grid {
     grid-template-columns: 1fr;
   }
+  .engine-overview > [data-slot="card"]:not(.col-span-full) {
+    min-height: 0;
+  }
   .steps {
     grid-template-columns: 1fr;
     gap: 18px;
@@ -314,6 +384,23 @@ pre,
   }
   .metrics {
     grid-template-columns: 1fr;
+  }
+  .engine-picker {
+    grid-template-columns: 1fr;
+  }
+  .sidebar-engine-states {
+    grid-template-columns: 1fr;
+  }
+  .engine-header-status {
+    gap: 8px;
+  }
+  .project-header,
+  .content {
+    padding: 14px;
+  }
+  .engine-settings-card [data-slot="card-header"],
+  .engine-settings-card [data-slot="card-content"] {
+    padding-inline: 16px;
   }
   .empty-hero {
     padding: 20px;

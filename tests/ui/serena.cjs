@@ -51,10 +51,12 @@ const assert = require("node:assert/strict");
               };
             if (command === "detect_codegraph")
               return {
-                available: false,
+                available: location.search.includes("healthy"),
                 entry: null,
                 version: null,
-                error: "CODEGRAPH_UNAVAILABLE_FIXTURE",
+                error: location.search.includes("healthy")
+                  ? null
+                  : "CODEGRAPH_UNAVAILABLE_FIXTURE",
               };
             if (command === "get_project_snapshot")
               return {
@@ -62,12 +64,16 @@ const assert = require("node:assert/strict");
                 state: "stopped",
                 sequence: ++seq,
                 generation: "fixture",
-                indexState: "error",
+                indexState: location.search.includes("healthy")
+                  ? "ready"
+                  : "error",
                 sessions: 0,
-                error: {
-                  code: "CLI_NOT_FOUND",
-                  message: "CODEGRAPH_UNAVAILABLE_FIXTURE",
-                },
+                error: location.search.includes("healthy")
+                  ? null
+                  : {
+                      code: "CLI_NOT_FOUND",
+                      message: "CODEGRAPH_UNAVAILABLE_FIXTURE",
+                    },
               };
             if (command === "list_serena_snapshots")
               return {
@@ -179,14 +185,14 @@ const assert = require("node:assert/strict");
       );
       await page
         .getByRole("button", {
-          name: zh ? "启动 Serena" : "Start Serena",
+          name: zh ? "启动实例" : "Start instance",
           exact: true,
         })
         .click();
       await page.getByText("21340", { exact: true }).waitFor();
       await page
         .getByRole("button", {
-          name: zh ? "停止 Serena" : "Stop Serena",
+          name: zh ? "停止实例" : "Stop instance",
           exact: true,
         })
         .waitFor();
@@ -253,7 +259,10 @@ const assert = require("node:assert/strict");
           exact: true,
         })
         .click();
-      await page.getByText("Serena 1.7.0", { exact: true }).waitFor();
+      await page
+        .getByTestId("serena-settings")
+        .getByText(/Serena 1\.7\.0/)
+        .waitFor();
       assert.equal(
         await page
           .getByLabel(zh ? "Serena 入口" : "Serena executable", { exact: true })
@@ -265,6 +274,128 @@ const assert = require("node:assert/strict");
         path: `.tools/serena-settings-${language}.png`,
         fullPage: true,
       });
+      await page.goto(
+        (process.env.UI_TEST_URL || "http://127.0.0.1:1420") + "?healthy=1",
+      );
+      for (const width of [1280, 1000]) {
+        await page.setViewportSize({ width, height: 820 });
+        const positions = [];
+        for (const engine of ["CodeGraph", "Serena"]) {
+          await page
+            .getByRole("group", { name: zh ? "项目引擎" : "Project engines" })
+            .getByRole("button", { name: new RegExp(engine) })
+            .click();
+          await page.getByTestId("engine-runtime-card").waitFor();
+          const action = await page.getByTestId("engine-actions").boundingBox();
+          const card = await page
+            .getByTestId("engine-runtime-card")
+            .boundingBox();
+          positions.push({ action, card });
+          assert(
+            await page
+              .getByTestId("engine-actions")
+              .getByRole("button", {
+                name: zh ? "启动实例" : "Start instance",
+                exact: true,
+              })
+              .isVisible(),
+          );
+          assert.equal(
+            await page
+              .locator(`[data-testid="${engine.toLowerCase()}-panel"]`)
+              .getByRole("button", {
+                name: zh ? "启动实例" : "Start instance",
+                exact: true,
+              })
+              .count(),
+            0,
+          );
+          assert(
+            (await page.getByTestId("engine-connection-card").count()) === 1,
+          );
+          assert(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          );
+          await page.screenshot({
+            path: `.tools/unified-${engine}-${language}-${width}.png`,
+            fullPage: true,
+          });
+        }
+        for (const key of ["x", "y", "width", "height"])
+          assert(
+            Math.abs(positions[0].action[key] - positions[1].action[key]) < 2,
+            `Action ${key} differs`,
+          );
+        for (const key of ["x", "y", "width"])
+          assert(
+            Math.abs(positions[0].card[key] - positions[1].card[key]) < 2,
+            `Runtime card ${key} differs`,
+          );
+      }
+      await page.keyboard.press("Control+,");
+      const cgSettings = page.getByTestId("codegraph-settings"),
+        srSettings = page.getByTestId("serena-settings");
+      const cgInput = page.locator("#entry"),
+        srInput = page.locator("#serena-entry");
+      await cgInput.fill(
+        "C:\\Users\\example\\a-long-installation-directory\\codegraph.cmd",
+      );
+      await srInput.fill(
+        "C:\\Users\\example\\another-long-installation-directory\\serena.exe",
+      );
+      for (const [width, height] of [
+        [1440, 900],
+        [1280, 820],
+        [1000, 680],
+        [800, 560],
+        [640, 448],
+        [533, 373],
+        [1280, 820],
+      ]) {
+        await page.setViewportSize({ width, height });
+        await cgSettings.scrollIntoViewIfNeeded();
+        const a = await cgSettings.boundingBox(),
+          b = await srSettings.boundingBox();
+        assert(
+          Math.abs(a.width - b.width) < 2,
+          "Engine settings widths differ",
+        );
+        if (width >= 1100) {
+          assert(Math.abs(a.y - b.y) < 2, "Engine settings are not peers");
+          assert(b.x > a.x, "Engine settings are not side-by-side");
+        }
+        if (width <= 800) {
+          assert(Math.abs(a.x - b.x) < 2);
+          assert(b.y > a.y, "Narrow settings did not stack");
+        }
+        assert(
+          await page.evaluate(
+            () =>
+              document.documentElement.scrollWidth <= innerWidth &&
+              document.querySelector("main").scrollWidth <=
+                document.querySelector("main").clientWidth + 1,
+          ),
+          `Overflow at ${width}`,
+        );
+        assert((await cgInput.inputValue()).includes("a-long-installation"));
+        assert(
+          (await srInput.inputValue()).includes("another-long-installation"),
+        );
+        await page
+          .getByRole("button", {
+            name: zh ? "保存偏好" : "Save preferences",
+            exact: true,
+          })
+          .scrollIntoViewIfNeeded();
+        await cgSettings.scrollIntoViewIfNeeded();
+        await page.locator("main").evaluate((el) => (el.scrollTop = 0));
+        await page.screenshot({
+          path: `.tools/settings-responsive-${language}-${width}.png`,
+          fullPage: true,
+        });
+      }
       assert.deepEqual(errors, []);
       await page.close();
     }

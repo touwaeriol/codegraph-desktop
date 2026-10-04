@@ -163,3 +163,9 @@ Claude Code 原默认模型 `claude-fable-5` 返回中转服务 503（无可用�
 - 浏览器模拟 Tauri IPC：中英文 Serena 工作台、独立启动、客户端配置目标、入口检测失败与成功提示通过；原有语言、CodeGraph 检测、配置预览三个回归套件通过。截图以 1100×780 检查，原有回归保留 1000×680。
 - TypeScript/Vite、Rust fmt、clippy 严格检查通过。浏览器模拟不等同于原生 WebView 交互；macOS/Linux 的 Serena 真实运行尚未验收。
 - 手工运行真实测试：设置 `SERENA_TEST_ENTRY` 为已安装 Serena 的绝对可执行路径，并确保 uv 在 PATH 中，然后执行 `cargo test -p codegraph-desktop real_native_http_symbols_and_process_cleanup -- --ignored --nocapture`。测试在临时目录创建项目并指定独立 `SERENA_HOME`，不改动实际项目配置。
+
+## v0.1.10 界面一致性与响应式验证
+
+- CodeGraph / Serena 复用页头按钮、运行卡片、状态徽标和客户端接入组件；浏览器测试核对两种语言在 1280 / 1000 宽度下的按钮和卡片坐标一致。
+- 设置页两个引擎使用同一个卡片组件，宽窗口并排，窄窗口堆叠；通用偏好独立分区。连续切换 1440×900、1280×820、1000×680、800×560、640×448、533×373 后再恢复宽窗口，验证无横向溢出、保存按钮可滚动到达、未保存入口内容保留。较小有效视口覆盖桌面放大后的布局条件，不等同于原生操作系统鼠标拖动或 DPI 切换实测。
+- TypeScript/Vite 生产构建和四组浏览器模拟 IPC 回归通过。原生窗口明确启用 resizable，最小尺寸更新为 800×560；发布流水线负责各平台原生构建与检查。

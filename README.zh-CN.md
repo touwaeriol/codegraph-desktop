@@ -44,6 +44,8 @@ Windows 安装器自动使用中文或英文，不弹出语言选择窗口。mac
 
 ## Serena（可选引擎）
 
+CodeGraph 与 Serena 使用相同的工作台布局和页头操作。设置页将两个引擎作为同级卡片：宽窗口并排、窄窗口纵向排列，通用偏好单独放置。窗口支持拖动调整大小，最小尺寸为 800 × 560。
+
 项目工作台增加 CodeGraph / Serena 引擎切换。Serena 提供符号搜索、引用分析和语义编辑，无需先建立 CodeGraph 索引；侧栏分别显示两个引擎的运行状态。
 
 1. 安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，执行 `uv tool install -p 3.13 serena-agent`，详见 [Serena 官方安装说明](https://oraios.github.io/serena/02-usage/010_installation.html)。
