@@ -55,8 +55,8 @@ Choose **Serena** in a project's engine switcher to manage semantic symbol searc
 
 1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and run `uv tool install -p 3.13 serena-agent`, following the [official Serena installation guide](https://oraios.github.io/serena/02-usage/010_installation.html).
 2. In **Settings → Serena executable**, detect the executable or select it manually. Detection validates the CLI before saving it.
-3. Select a project, choose **Serena**, and click **Start Serena**. First use may download language-server dependencies; inspect **Logs** if startup or tools fail. Language-specific dependencies remain Serena's responsibility.
-4. Under **MCP configuration**, preview and apply the separate `serena` entry. Default merging preserves `codegraph` and unrelated settings. The same backup, edit, overwrite and external-change checks apply.
+3. Select a project, choose **Serena**, and click **Start instance**. First use may download language-server dependencies; inspect **Logs** if startup or tools fail. Language-specific dependencies remain Serena's responsibility.
+4. In **MCP configuration**, select CodeGraph and Serena together (the default), or select just one engine. Choose Codex and/or Claude Code, review one combined preview, and apply once. Each project file is written once, with a shared backup and rollback. Merge preserves other settings; overwrite and manual editing remain available. Only the project `.codex/config.toml` / `.mcp.json` files are changed.
 
 Serena runs its native Streamable HTTP server at `http://127.0.0.1:<project-port>/mcp` in `--context ide --project <absolute-path>` single-project mode. Each project has a stable independent port; an occupied port fails instead of switching. Clients connect directly, preserving Serena's tools and instructions. Startup checks for symbol tools and rejects servers that expose project switching. Native Serena endpoints do not use CodeGraph bearer tokens and are intended for trusted local clients. Single-project mode is not an OS sandbox.
 

@@ -50,8 +50,8 @@ CodeGraph 与 Serena 使用相同的工作台布局和页头操作。设置页�
 
 1. 安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，执行 `uv tool install -p 3.13 serena-agent`，详见 [Serena 官方安装说明](https://oraios.github.io/serena/02-usage/010_installation.html)。
 2. 在“设置 → Serena 入口”中检测或手动选择可执行文件；检测通过后才保存入口。
-3. 选择项目和 Serena，点击“启动 Serena”。首次使用可能下载语言服务器依赖，失败时查看运行日志；各编程语言所需依赖由 Serena 管理。
-4. 在“MCP 配置”中预览并添加独立的 `serena` 条目。默认合并保留 `codegraph` 及其他配置，支持差异预览、备份、覆盖、手动编辑和外部修改检查。只修改项目的 `.codex/config.toml` / `.mcp.json`。
+3. 选择项目和 Serena，点击“启动实例”。首次使用可能下载语言服务器依赖，失败时查看运行日志；各编程语言所需依赖由 Serena 管理。
+4. 在“MCP 配置”中默认同时勾选 CodeGraph 与 Serena，也可只选一个。选择 Codex / Claude Code 后，一次预览并应用两个 MCP；每个项目文件只写入一次，统一备份、失败回滚。默认合并保留其他设置，也支持覆盖和手动编辑。只修改项目的 `.codex/config.toml` / `.mcp.json`。
 
 Serena 通过 `--context ide --project <绝对路径>` 单项目模式启动原生 HTTP，每个项目使用固定独立端口 `http://127.0.0.1:<端口>/mcp`，客户端直接连接。启动检查要求存在符号工具且没有切换项目工具。端口冲突报错，不自动切换。原生 Serena 不使用 CodeGraph 的令牌，仅供本机可信客户端使用；单项目模式不是操作系统沙箱。
 

@@ -132,7 +132,7 @@ const assert = require("node:assert/strict");
               return {
                 previewId: "preview",
                 projectId: "fixture",
-                serviceName: args.engine,
+                serviceName: args.engines.join(", "),
                 files: [
                   {
                     client: "codex",
@@ -211,6 +211,19 @@ const assert = require("node:assert/strict");
           exact: true,
         })
         .click();
+      assert(
+        await page
+          .getByRole("checkbox", { name: "CodeGraph MCP", exact: true })
+          .isChecked(),
+      );
+      assert(
+        await page
+          .getByRole("checkbox", { name: "Serena MCP", exact: true })
+          .isChecked(),
+      );
+      await page
+        .getByRole("checkbox", { name: "CodeGraph MCP", exact: true })
+        .uncheck();
       await page
         .getByRole("button", {
           name: zh ? "测试连接" : "Test connection",
@@ -218,6 +231,13 @@ const assert = require("node:assert/strict");
         })
         .click();
       await page.getByText("SERENA_HANDSHAKE_OK").waitFor();
+      await page
+        .getByRole("checkbox", { name: "CodeGraph MCP", exact: true })
+        .check();
+      await page.screenshot({
+        path: `.tools/mcp-batch-${language}.png`,
+        fullPage: true,
+      });
       await page
         .getByRole("button", {
           name: zh ? "预览并配置" : "Preview configuration",
@@ -232,14 +252,53 @@ const assert = require("node:assert/strict");
           .then((s) => s.includes("serena")),
       );
       const calls = await page.evaluate(() => window.__calls);
-      for (const name of ["test_project_mcp", "preview_client_config"])
-        assert.equal(
-          calls.find((c) => c.command === name).args.engine,
-          "serena",
-        );
+      assert.equal(
+        calls.find((c) => c.command === "test_project_mcp").args.engine,
+        "serena",
+      );
+      assert.deepEqual(
+        calls
+          .find((c) => c.command === "preview_client_config")
+          .args.engines.slice()
+          .sort(),
+        ["codegraph", "serena"],
+      );
       await page
         .getByRole("button", { name: zh ? "取消" : "Cancel", exact: true })
         .click();
+      await page
+        .getByRole("checkbox", { name: "Serena MCP", exact: true })
+        .uncheck();
+      await page
+        .getByRole("button", {
+          name: zh ? "预览并配置" : "Preview configuration",
+          exact: true,
+        })
+        .click();
+      await page.getByRole("dialog").waitFor();
+      assert.deepEqual(
+        await page.evaluate(
+          () =>
+            window.__calls
+              .filter((c) => c.command === "preview_client_config")
+              .at(-1).args.engines,
+        ),
+        ["codegraph"],
+      );
+      await page
+        .getByRole("button", { name: zh ? "取消" : "Cancel", exact: true })
+        .click();
+      await page
+        .getByRole("checkbox", { name: "CodeGraph MCP", exact: true })
+        .uncheck();
+      assert(
+        await page
+          .getByRole("button", {
+            name: zh ? "预览并配置" : "Preview configuration",
+            exact: true,
+          })
+          .isDisabled(),
+      );
       await page.keyboard.press("Control+,");
       await page.getByTestId("serena-settings").waitFor();
       await page

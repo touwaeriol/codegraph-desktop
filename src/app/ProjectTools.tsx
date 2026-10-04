@@ -52,7 +52,12 @@ import type {
 } from "@/lib/types";
 
 type PreviewSource =
-  | { kind: "client"; action: "install" | "remove"; clients: Client[] }
+  | {
+      kind: "client";
+      action: "install" | "remove";
+      clients: Client[];
+      engines: Engine[];
+    }
   | { kind: "restore"; operationId: string }
   | { kind: "previous"; root: string };
 type FileDraft = { mode: "merge" | "overwrite" | "edit"; content?: string };
@@ -88,16 +93,22 @@ export function ProjectTools({
   refresh: () => Promise<void>;
 }) {
   const language = useLanguage();
+  const [engines, setEngines] = useState<Engine[]>(["codegraph", "serena"]);
   const running =
-    engine === "serena"
-      ? serena?.state === "running"
-      : snapshot?.state === "running";
+    engines.length > 0 &&
+    engines.every((value) =>
+      value === "serena"
+        ? serena?.state === "running"
+        : snapshot?.state === "running",
+    );
   useEffect(() => {
     setError("");
     setProbe(null);
   }, [language]);
   const [clients, setClients] = useState<Client[]>(["codex", "claude"]),
-    [statuses, setStatuses] = useState<ConfigStatus[]>([]),
+    [statuses, setStatuses] = useState<(ConfigStatus & { engine: Engine })[]>(
+      [],
+    ),
     [preview, setPreview] = useState<ConfigPreview | null>(null),
     [result, setResult] = useState<ConfigResult | null>(null),
     [probe, setProbe] = useState<{
@@ -155,13 +166,22 @@ export function ProjectTools({
     overscan: 12,
   });
   async function loadStatus() {
-    setStatuses(
-      await call<ConfigStatus[]>("get_client_config_status", {
-        engine,
-        projectId: project.id,
-      }),
-    );
+    setStatuses(await fetchStatuses());
     setBackups(await call("list_config_backups", { projectId: project.id }));
+  }
+  async function fetchStatuses() {
+    return (
+      await Promise.all(
+        (["codegraph", "serena"] as const).map(async (engine) =>
+          (
+            await call<ConfigStatus[]>("get_client_config_status", {
+              engine,
+              projectId: project.id,
+            })
+          ).map((status) => ({ ...status, engine })),
+        ),
+      )
+    ).flat();
   }
   useEffect(() => {
     let active = true;
@@ -169,10 +189,7 @@ export function ProjectTools({
     const load = () =>
       Promise.all([
         call<LogEntry[]>("read_logs", { projectId: project.id, limit: 2000 }),
-        call<ConfigStatus[]>("get_client_config_status", {
-          engine,
-          projectId: project.id,
-        }),
+        fetchStatuses(),
         call<TaskProgress[]>("get_project_tasks", { projectId: project.id }),
         call<{ operationId: string; state: string; backupPath: string }[]>(
           "list_config_backups",
@@ -263,7 +280,12 @@ export function ProjectTools({
     }
   }
   async function configPreview(action: "install" | "remove") {
-    await beginPreview({ kind: "client", action, clients: [...clients] });
+    await beginPreview({
+      kind: "client",
+      action,
+      clients: [...clients],
+      engines: [...engines],
+    });
   }
   async function requestPreview(
     source: PreviewSource,
@@ -280,7 +302,7 @@ export function ProjectTools({
         previousRoot: source.root,
       });
     return call<ConfigPreview>("preview_client_config", {
-      engine,
+      engines: source.engines,
       projectId: project.id,
       clients: source.clients,
       action: source.action,
@@ -461,9 +483,7 @@ export function ProjectTools({
       <TabsContent value="config" className="space-y-4">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-lg font-semibold">
-              {engine === "serena" ? "Serena" : "CodeGraph"} · {t("MCP 配置")}
-            </h2>
+            <h2 className="text-lg font-semibold">{t("MCP 配置")}</h2>
             <p className="text-sm text-muted-foreground mt-1">
               {t("客户端将共用")}
               {project.name}
@@ -476,32 +496,72 @@ export function ProjectTools({
               disabled={busy || !running}
               title={!running ? t("需先启动实例") : undefined}
               onClick={() =>
-                void execute(async () =>
-                  setProbe(
-                    await call("test_project_mcp", {
-                      projectId: project.id,
+                void execute(async () => {
+                  const results = await Promise.all(
+                    engines.map(async (engine) => ({
                       engine,
-                    }),
-                  ),
-                )
+                      ...(await call<NonNullable<typeof probe>>(
+                        "test_project_mcp",
+                        { projectId: project.id, engine },
+                      )),
+                    })),
+                  );
+                  setProbe({
+                    success: results.every((r) => r.success),
+                    tools: results.flatMap((r) =>
+                      r.tools.map((tool) => `${r.engine}: ${tool}`),
+                    ),
+                    message: results
+                      .map((r) => `${r.engine}: ${r.message}`)
+                      .join("\n"),
+                    checkedAt: new Date().toISOString(),
+                  });
+                })
               }
             >
               <ActivityIcon />
               {t("测试连接")}
             </Button>
             <Button
-              disabled={busy || !clients.length}
+              disabled={busy || !clients.length || !engines.length}
               onClick={() => void configPreview("install")}
             >
               {t("预览并配置")}
             </Button>
           </div>
         </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("选择 MCP")}</CardTitle>
+            <CardDescription>
+              {t("可同时配置两个 MCP，一次预览并写入所选客户端的项目配置。")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-6">
+            {(["codegraph", "serena"] as const).map((value) => (
+              <label key={value} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={engines.includes(value)}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setProbe(null);
+                    setEngines((old) =>
+                      e.target.checked
+                        ? [...old, value]
+                        : old.filter((v) => v !== value),
+                    );
+                  }}
+                />
+                {value === "codegraph" ? "CodeGraph MCP" : "Serena MCP"}
+              </label>
+            ))}
+          </CardContent>
+        </Card>
         {(["codex", "claude"] as const).map((client) => {
-          const status = statuses.find((s) => s.client === client);
           return (
             <Card key={client}>
-              <CardHeader className="flex-row items-start justify-between gap-4">
+              <CardHeader className="flex-row items-start justify-between gap-4 flex-wrap">
                 <div className="flex items-center gap-3">
                   <input
                     id={`client-${client}`}
@@ -526,23 +586,38 @@ export function ProjectTools({
                     </CardDescription>
                   </div>
                 </div>
-                <Badge variant="secondary">
-                  {status
-                    ? {
-                        missing: t("未配置"),
-                        configured: t("已配置"),
-                        repair: t("需修复"),
-                        parseError: t("解析错误"),
-                      }[status.state]
-                    : t("尚未获取")}
-                </Badge>
+                <div className="flex flex-wrap gap-2">
+                  {(["codegraph", "serena"] as const).map((value) => {
+                    const status = statuses.find(
+                      (s) => s.client === client && s.engine === value,
+                    );
+                    return (
+                      <Badge variant="secondary" key={value}>
+                        {value === "codegraph" ? "CodeGraph" : "Serena"} ·{" "}
+                        {status
+                          ? {
+                              missing: t("未配置"),
+                              configured: t("已配置"),
+                              repair: t("需修复"),
+                              parseError: t("解析错误"),
+                            }[status.state]
+                          : t("尚未获取")}
+                      </Badge>
+                    );
+                  })}
+                </div>
               </CardHeader>
               <CardContent className="text-xs text-muted-foreground">
-                {status?.message && (
-                  <p className="text-destructive mb-2 break-all">
-                    {status.message}
-                  </p>
-                )}
+                {statuses
+                  .filter((s) => s.client === client && s.message)
+                  .map((status) => (
+                    <p
+                      key={status.engine}
+                      className="text-destructive mb-2 break-all"
+                    >
+                      {status.engine}: {status.message}
+                    </p>
+                  ))}
                 {t("配置状态不代表实际连接。当前项目总会话：")}
                 {snapshot?.sessions ?? t("尚未获取")}
                 {t("；尚未获取按客户端分类的会话信息。")}
@@ -553,54 +628,51 @@ export function ProjectTools({
         <Card>
           <CardHeader>
             <CardTitle className="text-sm">{t("连接路径")}</CardTitle>
-            <CardDescription>
-              {engine === "serena"
-                ? t("客户端 HTTP → 当前项目 Serena")
-                : t("客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph")}
-            </CardDescription>
           </CardHeader>
           <CardContent>
-            {engine === "serena" && serena?.endpoint && (
-              <p className="mono text-xs mb-3 break-all">{serena.endpoint}</p>
-            )}
-            {engine === "codegraph" &&
-              snapshot?.state === "running" &&
-              snapshot.port && (
-                <p className="mono text-xs mb-3 break-all">
-                  {t("当前服务地址：http://127.0.0.1:")}
-                  {snapshot.port}/mcp/{project.id}
+            {engines.map((value) => (
+              <div key={value} className="mb-4">
+                <p className="text-sm font-medium">
+                  {value === "codegraph" ? "CodeGraph" : "Serena"}
                 </p>
-              )}
+                <p className="text-xs text-muted-foreground mt-1">
+                  {value === "serena"
+                    ? t("客户端 HTTP → 当前项目 Serena")
+                    : t("客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph")}
+                </p>
+                <p className="mono text-xs mt-2 break-all">
+                  {value === "serena"
+                    ? serena?.endpoint
+                    : snapshot?.port
+                      ? `http://127.0.0.1:${snapshot.port}/mcp/${project.id}`
+                      : null}
+                </p>
+              </div>
+            ))}
             <p className="text-xs text-muted-foreground leading-6">
               {t(
                 "请先在 CodeGraph Desktop 启动当前项目；实例停止或桌面应用退出后，HTTP 服务不可用。客户端可能要求信任项目或批准 MCP；写入后请重新加载客户端。独立测试通过不表示真实客户端已连接。",
               )}
             </p>
-            <p className="text-xs text-muted-foreground leading-6 mt-2">
-              {engine === "serena"
-                ? t(
-                    "Serena 使用固定的独立本机端口，只监听 127.0.0.1。原生服务不使用 CodeGraph 的令牌；请仅供本机可信客户端使用。停止 Serena 或退出应用后连接不可用。",
-                  )
-                : t(
-                    "所有项目共用一个固定本机端口，通过 /mcp/项目ID 路由分别连接；每个项目的令牌与会话独立隔离。重启后地址保持不变，端口冲突会报错，不会自动切换。配置含项目鉴权信息，请勿公开分享。",
-                  )}
-            </p>
-            {engine === "codegraph" && (
-              <Alert className="mt-4">
-                <RefreshCw />
-                <AlertTitle>{t("迁移已有客户端配置")}</AlertTitle>
-                <AlertDescription>
-                  {t(
-                    "之前生成的配置需要重新点击“预览并配置”，核对后应用，才能迁移为直接 HTTP 连接。",
-                  )}
-                </AlertDescription>
-              </Alert>
+            {engines.includes("serena") && (
+              <p className="text-xs text-muted-foreground leading-6 mt-2">
+                {t(
+                  "Serena 使用固定的独立本机端口，只监听 127.0.0.1。原生服务不使用 CodeGraph 的令牌；请仅供本机可信客户端使用。停止 Serena 或退出应用后连接不可用。",
+                )}
+              </p>
+            )}
+            {engines.includes("codegraph") && (
+              <p className="text-xs text-muted-foreground leading-6 mt-2">
+                {t(
+                  "所有项目共用一个固定本机端口，通过 /mcp/项目ID 路由分别连接；每个项目的令牌与会话独立隔离。重启后地址保持不变，端口冲突会报错，不会自动切换。配置含项目鉴权信息，请勿公开分享。",
+                )}
+              </p>
             )}
             <div className="toolbar mt-4">
               <Button
                 variant="ghost"
                 size="sm"
-                disabled={busy || !clients.length}
+                disabled={busy || !clients.length || !engines.length}
                 onClick={() => void configPreview("remove")}
               >
                 {t("预览移除受管配置")}
@@ -611,13 +683,9 @@ export function ProjectTools({
                 onClick={() =>
                   void navigator.clipboard
                     .writeText(
-                      engine === "serena"
-                        ? t(
-                            "先在设置中检测 Serena，再为当前项目启动 Serena。在 MCP 配置页预览并添加 serena 条目，重新连接客户端。",
-                          )
-                        : t(
-                            "在 CodeGraph Desktop 添加项目，初始化索引并启动实例；在 MCP 配置页预览并应用直接 HTTP 配置，然后在 Codex / Claude Code 信任项目并批准 MCP。已有配置需要重新预览应用以迁移。客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph。所有项目共用固定本机端口，由 /mcp/项目ID 区分项目，令牌与会话独立隔离。重启保持地址；端口冲突会报错，不会自动切换。实例停止或桌面应用退出后服务不可用。配置含本机项目鉴权信息，请勿公开分享。",
-                          ),
+                      t(
+                        "在 MCP 配置中勾选 CodeGraph 和 Serena，选择客户端，预览并应用后重新加载客户端。使用前分别启动所需实例。",
+                      ),
                     )
                     .then(() => toast.success(t("接入说明已复制")))
                 }

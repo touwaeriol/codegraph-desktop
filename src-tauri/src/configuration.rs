@@ -69,6 +69,8 @@ pub struct ConfigFile {
 #[serde(rename_all = "camelCase")]
 pub struct ConfigPreview {
     #[serde(skip)]
+    pub ownership: HashMap<String, HashMap<String, Option<String>>>,
+    #[serde(skip)]
     pub validated_root: Option<String>,
     pub preview_id: String,
     pub project_id: String,
@@ -99,6 +101,8 @@ pub struct ConfigStatus {
 }
 #[derive(Serialize, Deserialize)]
 struct Backup {
+    #[serde(default)]
+    service_names: Vec<String>,
     project_id: String,
     service_name: String,
     state: String,
@@ -154,7 +158,7 @@ fn merge(
     client: &str,
     name: &str,
     _id: &str,
-    binding: &impl HttpTarget,
+    binding: &(impl HttpTarget + ?Sized),
     remove: bool,
 ) -> Result<(String, bool, Option<String>)> {
     if client == "codex" {
@@ -300,6 +304,17 @@ pub fn preview_with_overrides(
     managed: &HashMap<String, String>,
     overrides: &[ConfigOverride],
 ) -> Result<ConfigPreview> {
+    preview_from(p, clients, action, binding, managed, overrides, None)
+}
+fn preview_from(
+    p: &Project,
+    clients: &[String],
+    action: &str,
+    binding: &dyn HttpTarget,
+    managed: &HashMap<String, String>,
+    overrides: &[ConfigOverride],
+    inputs: Option<&HashMap<String, Option<Vec<u8>>>>,
+) -> Result<ConfigPreview> {
     if action != "install" && action != "remove" {
         return Err(AppError::new("INVALID_ACTION", "无效配置操作"));
     }
@@ -339,7 +354,13 @@ pub fn preview_with_overrides(
             return Err(AppError::new("INVALID_CLIENT", client));
         });
         safe_path(root, &path)?;
-        let original = read(&path)?;
+        let original = match inputs {
+            Some(inputs) => inputs
+                .get(client)
+                .cloned()
+                .ok_or_else(|| AppError::new("INVALID_CLIENT", "Missing preview input"))?,
+            None => read(&path)?,
+        };
         let before = text(&original)?;
         let choice = choices.get(client.as_str()).copied();
         let mode = choice.map(|v| v.mode).unwrap_or(ConfigMode::Merge);
@@ -432,6 +453,7 @@ pub fn preview_with_overrides(
         return Err(AppError::new("INVALID_CLIENT", "至少选择一个客户端"));
     }
     Ok(ConfigPreview {
+        ownership: HashMap::new(),
         validated_root: None,
         preview_id: uuid::Uuid::new_v4().to_string(),
         project_id: p.id.clone(),
@@ -439,6 +461,82 @@ pub fn preview_with_overrides(
         files,
     })
 }
+pub fn preview_many(
+    p: &Project,
+    clients: &[String],
+    action: &str,
+    bindings: &[Target],
+    managed: &HashMap<String, HashMap<String, String>>,
+    overrides: &[ConfigOverride],
+) -> Result<ConfigPreview> {
+    if bindings.is_empty() {
+        return Err(AppError::new("INVALID_ENGINE", "Select at least one MCP"));
+    }
+    let mut combined: Option<ConfigPreview> = None;
+    let empty = HashMap::new();
+    for binding in bindings {
+        let inputs = combined.as_ref().map(|preview| {
+            preview
+                .files
+                .iter()
+                .map(|f| {
+                    (
+                        f.client.clone(),
+                        f.restore_bytes
+                            .clone()
+                            .unwrap_or_else(|| Some(f.after.as_bytes().to_vec())),
+                    )
+                })
+                .collect()
+        });
+        // Overwrite clears the file once, then merges every selected engine into it.
+        let choices = overrides
+            .iter()
+            .map(|change| ConfigOverride {
+                mode: if combined.is_some() && change.mode == ConfigMode::Overwrite {
+                    ConfigMode::Merge
+                } else {
+                    change.mode
+                },
+                ..change.clone()
+            })
+            .collect::<Vec<_>>();
+        let mut next = preview_from(
+            p,
+            clients,
+            action,
+            binding,
+            managed.get(&binding.name).unwrap_or(&empty),
+            &choices,
+            inputs.as_ref(),
+        )?;
+        let fingerprints = next
+            .files
+            .iter()
+            .map(|f| (f.client.clone(), f.fingerprint.clone()))
+            .collect();
+        if let Some(preview) = &mut combined {
+            for file in &mut preview.files {
+                let next_file = next.files.iter().find(|f| f.client == file.client).unwrap();
+                file.after.clone_from(&next_file.after);
+                file.conflict |= next_file.conflict;
+                file.restore_bytes = if action == "remove" && file.after == file.before {
+                    Some(file.original.clone())
+                } else {
+                    None
+                };
+            }
+            preview.ownership.insert(binding.name.clone(), fingerprints);
+            preview.service_name.push_str(", ");
+            preview.service_name.push_str(&binding.name);
+        } else {
+            next.ownership.insert(binding.name.clone(), fingerprints);
+            combined = Some(next);
+        }
+    }
+    Ok(combined.unwrap())
+}
+
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
@@ -479,6 +577,7 @@ fn apply_with(
     let backup = data.join("backups").join(&op);
     private_dir(&backup)?;
     let mut manifest = Backup {
+        service_names: preview.ownership.keys().cloned().collect(),
         project_id: preview.project_id.clone(),
         service_name: preview.service_name.clone(),
         state: "pending".into(),
@@ -691,6 +790,7 @@ mod tests {
         let path = dir.path().join(".mcp.json");
         std::fs::write(&path, "{}").unwrap();
         let p = ConfigPreview {
+            ownership: HashMap::new(),
             validated_root: None,
             preview_id: "x".into(),
             project_id: "x".into(),
@@ -782,7 +882,7 @@ pub fn list_backups(data: &Path, project_id: &str) -> Result<Vec<BackupSummary>>
     }
     Ok(result)
 }
-pub fn backup_service(data: &Path, operation_id: &str) -> Result<String> {
+pub fn backup_services(data: &Path, operation_id: &str) -> Result<Vec<String>> {
     uuid::Uuid::parse_str(operation_id).map_err(|e| AppError::new("INVALID_OPERATION", e))?;
     let manifest: Backup = serde_json::from_slice(&std::fs::read(
         data.join("backups")
@@ -790,13 +890,26 @@ pub fn backup_service(data: &Path, operation_id: &str) -> Result<String> {
             .join("manifest.json"),
     )?)
     .map_err(|_| AppError::new("BACKUP_CORRUPT", "备份清单格式无效"))?;
-    Ok(manifest.service_name)
+    Ok(if manifest.service_names.is_empty() {
+        vec![manifest.service_name]
+    } else {
+        manifest.service_names
+    })
 }
+#[cfg(test)]
 pub fn preview_restore(
     data: &Path,
     operation_id: &str,
     p: &Project,
     binding: &impl HttpTarget,
+) -> Result<ConfigPreview> {
+    preview_restore_many(data, operation_id, p, &[binding])
+}
+pub fn preview_restore_many(
+    data: &Path,
+    operation_id: &str,
+    p: &Project,
+    bindings: &[&dyn HttpTarget],
 ) -> Result<ConfigPreview> {
     uuid::Uuid::parse_str(operation_id).map_err(|e| AppError::new("INVALID_OPERATION", e))?;
     let path = data
@@ -823,6 +936,7 @@ pub fn preview_restore(
             )
         })?;
     let mut files = Vec::new();
+    let mut ownership: HashMap<String, HashMap<String, Option<String>>> = HashMap::new();
     for file in manifest.files {
         safe_path(Path::new(root), Path::new(&file.path))?;
         let current = read(Path::new(&file.path))?;
@@ -837,12 +951,24 @@ pub fn preview_restore(
         }
         let before = text(&current)?;
         let after = text(&file.original)?;
-        let fingerprint = if file.original.is_some() {
-            managed_fingerprint(&after, &file.client, &manifest.service_name, &p.id, binding)
-                .unwrap_or(None)
-        } else {
-            None
-        };
+        let mut fingerprint = None;
+        for binding in bindings {
+            let name = if manifest.service_names.is_empty() {
+                &manifest.service_name
+            } else {
+                binding.name()
+            };
+            let restored = if file.original.is_some() {
+                managed_fingerprint(&after, &file.client, name, &p.id, *binding).unwrap_or(None)
+            } else {
+                None
+            };
+            fingerprint.clone_from(&restored);
+            ownership
+                .entry(name.into())
+                .or_default()
+                .insert(file.client.clone(), restored);
+        }
         files.push(ConfigFile {
             client: file.client,
             path: file.path,
@@ -859,6 +985,7 @@ pub fn preview_restore(
         return Err(AppError::new("BACKUP_UNCHANGED", "文件已经恢复，无需修改"));
     }
     Ok(ConfigPreview {
+        ownership,
         preview_id: uuid::Uuid::new_v4().to_string(),
         validated_root: if root != &p.canonical_path {
             Some(root.clone())
@@ -979,6 +1106,7 @@ mod recovery_tests {
         let b = dir.path().join("b.json");
         std::fs::write(&a, b"{}").unwrap();
         let preview = ConfigPreview {
+            ownership: HashMap::new(),
             validated_root: None,
             preview_id: "test".into(),
             project_id: "p".into(),
@@ -1005,6 +1133,7 @@ mod recovery_tests {
         let bytes = b"\xef\xbb\xbf{}".to_vec();
         std::fs::write(&a, &bytes).unwrap();
         let preview = ConfigPreview {
+            ownership: HashMap::new(),
             validated_root: None,
             preview_id: "test".into(),
             project_id: p.id.clone(),
@@ -1028,6 +1157,7 @@ mod recovery_tests {
         let p = project(dir.path());
         let a = dir.path().join("a.json");
         let preview = ConfigPreview {
+            ownership: HashMap::new(),
             validated_root: None,
             preview_id: "test".into(),
             project_id: p.id.clone(),
@@ -1193,7 +1323,7 @@ fn managed_fingerprint(
     client: &str,
     name: &str,
     _id: &str,
-    binding: &impl HttpTarget,
+    binding: &(impl HttpTarget + ?Sized),
 ) -> Result<Option<String>> {
     let content = content.trim_start_matches('\u{feff}');
     let endpoint = binding.endpoint();
@@ -1249,10 +1379,211 @@ fn managed_fingerprint(
 mod override_tests {
     use super::*;
     #[test]
+    fn batch_engines_merge_overwrite_edit_and_restore_together() {
+        for mode in [ConfigMode::Merge, ConfigMode::Overwrite, ConfigMode::Edit] {
+            let (dir, p, cg) = fixture();
+            let data = tempfile::tempdir().unwrap();
+            let bindings = vec![
+                Target {
+                    name: "codegraph".into(),
+                    endpoint: cg.endpoint(),
+                    authorization: Some(cg.authorization()),
+                },
+                Target {
+                    name: "serena".into(),
+                    endpoint: "http://127.0.0.1:58310/mcp".into(),
+                    authorization: None,
+                },
+            ];
+            let clients: Vec<String> = vec!["codex".into(), "claude".into()];
+            let originals = [
+                "# preserved\nmodel = 'existing'\n[mcp_servers.other]\ncommand = 'other'\n",
+                "{\"mcpServers\":{\"other\":{\"command\":\"other\"}}}",
+            ];
+            for (client, before) in clients.iter().zip(originals) {
+                std::fs::write(file_path(dir.path(), client), before).unwrap();
+            }
+            let generated =
+                preview_many(&p, &clients, "install", &bindings, &HashMap::new(), &[]).unwrap();
+            let choices = generated
+                .files
+                .iter()
+                .map(|f| ConfigOverride {
+                    client: f.client.clone(),
+                    mode,
+                    content: (mode == ConfigMode::Edit).then(|| f.after.clone()),
+                })
+                .collect::<Vec<_>>();
+            let preview = preview_many(
+                &p,
+                &clients,
+                "install",
+                &bindings,
+                &HashMap::new(),
+                &choices,
+            )
+            .unwrap();
+            assert_eq!(preview.files.len(), 2);
+            assert_eq!(preview.ownership.len(), 2);
+            for (f, before) in preview.files.iter().zip(originals) {
+                assert_eq!(f.before, before);
+                for binding in &bindings {
+                    assert!(managed_fingerprint(
+                        &f.after,
+                        &f.client,
+                        &binding.name,
+                        &p.id,
+                        binding
+                    )
+                    .unwrap()
+                    .is_some());
+                    assert!(preview.ownership[&binding.name][&f.client].is_some());
+                }
+                assert_eq!(
+                    entry_fingerprint(&f.after, &f.client, "other")
+                        .unwrap()
+                        .is_some(),
+                    mode != ConfigMode::Overwrite
+                );
+                // Preview generation is read-only.
+                assert_eq!(std::fs::read_to_string(&f.path).unwrap(), before);
+            }
+            let written = apply(&preview, dir.path(), data.path()).unwrap();
+            assert!(written.files.iter().all(|f| f.status == "success"));
+            let mut names = backup_services(data.path(), &written.operation_id).unwrap();
+            names.sort();
+            assert_eq!(names, ["codegraph", "serena"]);
+            let refs = bindings
+                .iter()
+                .map(|b| b as &dyn HttpTarget)
+                .collect::<Vec<_>>();
+            let restore =
+                preview_restore_many(data.path(), &written.operation_id, &p, &refs).unwrap();
+            assert_eq!(restore.ownership.len(), 2);
+            assert!(restore
+                .ownership
+                .values()
+                .all(|files| files.values().all(Option::is_none)));
+            apply(&restore, dir.path(), data.path()).unwrap();
+            for (client, before) in clients.iter().zip(originals) {
+                assert_eq!(
+                    std::fs::read_to_string(file_path(dir.path(), client)).unwrap(),
+                    before
+                );
+            }
+        }
+    }
+    #[test]
+    fn batch_engines_remove_conflicts_and_failure_do_not_partially_apply() {
+        let (dir, p, cg) = fixture();
+        let data = tempfile::tempdir().unwrap();
+        let bindings = vec![
+            Target {
+                name: "codegraph".into(),
+                endpoint: cg.endpoint(),
+                authorization: Some(cg.authorization()),
+            },
+            Target {
+                name: "serena".into(),
+                endpoint: "http://127.0.0.1:58310/mcp".into(),
+                authorization: None,
+            },
+        ];
+        let clients: Vec<String> = vec!["codex".into(), "claude".into()];
+        let preview =
+            preview_many(&p, &clients, "install", &bindings, &HashMap::new(), &[]).unwrap();
+        let failed = apply_with(&preview, dir.path(), data.path(), Some(1)).unwrap();
+        assert!(failed.files.iter().any(|f| f.status == "rolledBack"));
+        assert!(preview.files.iter().all(|f| !Path::new(&f.path).exists()));
+        apply(&preview, dir.path(), data.path()).unwrap();
+        let managed = preview
+            .ownership
+            .iter()
+            .map(|(engine, files)| {
+                (
+                    engine.clone(),
+                    files
+                        .iter()
+                        .filter_map(|(client, fp)| fp.clone().map(|fp| (client.clone(), fp)))
+                        .collect(),
+                )
+            })
+            .collect();
+        let remove = preview_many(&p, &clients, "remove", &bindings, &managed, &[]).unwrap();
+        for f in &remove.files {
+            for name in ["codegraph", "serena"] {
+                assert!(entry_fingerprint(&f.after, &f.client, name)
+                    .unwrap()
+                    .is_none());
+            }
+        }
+        let changed = format!("{}\n# external", preview.files[0].after);
+        let removed = apply(&remove, dir.path(), data.path()).unwrap();
+        let refs = bindings
+            .iter()
+            .map(|b| b as &dyn HttpTarget)
+            .collect::<Vec<_>>();
+        let restore = preview_restore_many(data.path(), &removed.operation_id, &p, &refs).unwrap();
+        assert!(restore
+            .ownership
+            .values()
+            .all(|files| files.values().all(Option::is_some)));
+        apply(&restore, dir.path(), data.path()).unwrap();
+        std::fs::write(&preview.files[0].path, &changed).unwrap();
+        assert_eq!(
+            apply(&remove, dir.path(), data.path()).err().unwrap().code,
+            "CONFIG_CHANGED"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&preview.files[1].path).unwrap(),
+            preview.files[1].after
+        );
+        std::fs::write(
+            &preview.files[0].path,
+            preview.files[0].after.replace("58310", "58311"),
+        )
+        .unwrap();
+        assert_eq!(
+            preview_many(&p, &clients, "remove", &bindings, &managed, &[])
+                .err()
+                .unwrap()
+                .code,
+            "CONFIG_CHANGED"
+        );
+        // Manual edits only claim entries that still match each engine's binding.
+        let edited = preview_many(
+            &p,
+            &clients,
+            "install",
+            &bindings,
+            &HashMap::new(),
+            &clients
+                .iter()
+                .map(|client| ConfigOverride {
+                    client: client.clone(),
+                    mode: ConfigMode::Edit,
+                    content: Some(
+                        if client == "codex" {
+                            "model = 'manual'"
+                        } else {
+                            "{}"
+                        }
+                        .into(),
+                    ),
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert!(edited
+            .ownership
+            .values()
+            .all(|files| files.values().all(Option::is_none)));
+    }
+    #[test]
     fn serena_configuration_preserves_codegraph_and_tracks_separate_ownership() {
         let (_dir, p, codegraph) = fixture();
         let data = tempfile::tempdir().unwrap();
-        let clients = vec!["codex".into(), "claude".into()];
+        let clients: Vec<String> = vec!["codex".into(), "claude".into()];
         let cg = preview(&p, &clients, "install", &codegraph, &HashMap::new()).unwrap();
         apply(&cg, Path::new(&p.canonical_path), data.path()).unwrap();
         let serena = Target {
@@ -1783,6 +2114,7 @@ pub fn shared_http_migration_preview(
     };
     let fingerprint = entry_fingerprint(&after, client, "codegraph")?;
     Ok(Some(ConfigPreview {
+        ownership: HashMap::new(),
         validated_root: None,
         preview_id: uuid::Uuid::new_v4().to_string(),
         project_id: p.id.clone(),

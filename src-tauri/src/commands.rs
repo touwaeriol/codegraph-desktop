@@ -422,9 +422,20 @@ pub fn preview_client_config(
     action: String,
     overrides: Option<Vec<configuration::ConfigOverride>>,
     engine: Option<String>,
+    engines: Option<Vec<String>>,
 ) -> Result<configuration::ConfigPreview> {
     let p = state.project(&project_id)?;
-    let target = binding_for(&state, &project_id, engine.as_deref())?;
+    let engines = engines.unwrap_or_else(|| vec![engine.unwrap_or_else(|| "codegraph".into())]);
+    let mut targets = Vec::new();
+    for engine in engines {
+        let target = binding_for(&state, &project_id, Some(&engine))?;
+        if !targets
+            .iter()
+            .any(|t: &configuration::Target| t.name == target.name)
+        {
+            targets.push(target);
+        }
+    }
     let managed = {
         let db = state.db.lock().unwrap();
         let mut stmt =
@@ -434,15 +445,25 @@ pub fn preview_client_config(
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })?
             .collect::<std::result::Result<HashMap<_, _>, _>>()?;
-        rows.into_iter()
-            .filter_map(|(key, fp)| managed_client(&target.name, &key).map(|client| (client, fp)))
+        targets
+            .iter()
+            .map(|target| {
+                (
+                    target.name.clone(),
+                    rows.iter()
+                        .filter_map(|(key, fp)| {
+                            managed_client(&target.name, key).map(|client| (client, fp.clone()))
+                        })
+                        .collect(),
+                )
+            })
             .collect()
     };
-    let preview = configuration::preview_with_overrides(
+    let preview = configuration::preview_many(
         &p,
         &clients,
         &action,
-        &target,
+        &targets,
         &managed,
         overrides.as_deref().unwrap_or(&[]),
     )?;
@@ -489,15 +510,29 @@ pub async fn apply_client_config(
     if preview.validated_root.is_none() && succeeded {
         let mut db = state.db.lock().unwrap();
         let tx = db.transaction()?;
-        for f in &preview.files {
-            let key = managed_key(&preview.service_name, &f.client);
-            if let Some(fp) = &f.fingerprint {
-                tx.execute("INSERT INTO managed_config(project_id,client,fingerprint) VALUES(?1,?2,?3) ON CONFLICT(project_id,client) DO UPDATE SET fingerprint=excluded.fingerprint",rusqlite::params![p.id,key,fp])?;
-            } else {
-                tx.execute(
-                    "DELETE FROM managed_config WHERE project_id=?1 AND client=?2",
-                    rusqlite::params![p.id, key],
-                )?;
+        let ownership = if preview.ownership.is_empty() {
+            HashMap::from([(
+                preview.service_name.clone(),
+                preview
+                    .files
+                    .iter()
+                    .map(|f| (f.client.clone(), f.fingerprint.clone()))
+                    .collect(),
+            )])
+        } else {
+            preview.ownership.clone()
+        };
+        for (service, files) in ownership {
+            for (client, fingerprint) in files {
+                let key = managed_key(&service, &client);
+                if let Some(fp) = &fingerprint {
+                    tx.execute("INSERT INTO managed_config(project_id,client,fingerprint) VALUES(?1,?2,?3) ON CONFLICT(project_id,client) DO UPDATE SET fingerprint=excluded.fingerprint",rusqlite::params![p.id,key,fp])?;
+                } else {
+                    tx.execute(
+                        "DELETE FROM managed_config WHERE project_id=?1 AND client=?2",
+                        rusqlite::params![p.id, key],
+                    )?;
+                }
             }
         }
         tx.commit()?;
@@ -622,16 +657,16 @@ pub fn preview_restore_backup(
             .iter()
             .any(|b| b.operation_id == operation_id)
         {
-            let preview = configuration::preview_restore(
-                &state.data,
-                &operation_id,
-                &p,
-                &binding_for(
-                    &state,
-                    &p.id,
-                    Some(&configuration::backup_service(&state.data, &operation_id)?),
-                )?,
-            )?;
+            let bindings = configuration::backup_services(&state.data, &operation_id)?
+                .iter()
+                .map(|service| binding_for(&state, &p.id, Some(service)))
+                .collect::<Result<Vec<_>>>()?;
+            let refs = bindings
+                .iter()
+                .map(|b| b as &dyn configuration::HttpTarget)
+                .collect::<Vec<_>>();
+            let preview =
+                configuration::preview_restore_many(&state.data, &operation_id, &p, &refs)?;
             state
                 .previews
                 .lock()

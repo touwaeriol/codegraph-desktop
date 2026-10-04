@@ -1,5 +1,10 @@
 // Chinese source messages are typed keys. Raw project and upstream text never passes through this catalog.
 export const english = {
+  "在 MCP 配置中勾选 CodeGraph 和 Serena，选择客户端，预览并应用后重新加载客户端。使用前分别启动所需实例。":
+    "Select CodeGraph and Serena in MCP configuration, choose your clients, preview and apply, then reload the clients. Start each required engine before use.",
+  "选择 MCP": "Select MCPs",
+  "可同时配置两个 MCP，一次预览并写入所选客户端的项目配置。":
+    "Select both MCPs to preview and apply them together in the selected clients' project configuration.",
   运行环境: "Runtime engines",
   通用偏好: "General preferences",
   "两个独立引擎，可分别配置和运行。":
