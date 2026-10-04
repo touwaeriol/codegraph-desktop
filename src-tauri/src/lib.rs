@@ -314,6 +314,11 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .setup(move |app| {
             if update_only || UPDATE_SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
                 app.handle().exit(0);

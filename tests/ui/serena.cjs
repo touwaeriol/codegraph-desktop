@@ -38,6 +38,11 @@ const assert = require("node:assert/strict");
           unregisterCallback() {},
           async invoke(command, args = {}) {
             window.__calls.push({ command, args });
+            if (command === "plugin:opener|open_url") {
+              if (window.__openerError)
+                throw new Error("BROWSER_OPEN_FAILED_FIXTURE");
+              return;
+            }
             if (command.startsWith("plugin:event|")) return ++seq;
             if (command === "list_projects") return [project];
             if (command === "get_settings")
@@ -337,6 +342,46 @@ const assert = require("node:assert/strict");
       await page.keyboard.press("Control+,");
       const cgSettings = page.getByTestId("codegraph-settings"),
         srSettings = page.getByTestId("serena-settings");
+      const settingsUrl = page.url();
+      for (const [card, url] of [
+        [cgSettings, "https://github.com/colbymchenry/codegraph"],
+        [
+          srSettings,
+          "https://oraios.github.io/serena/02-usage/010_installation.html",
+        ],
+      ]) {
+        await card.locator("summary").click();
+        const link = card.getByRole("link");
+        for (const action of ["click", "keyboard", "middle", "control"]) {
+          await page.evaluate(() => (window.__calls = []));
+          if (action === "keyboard") {
+            await link.focus();
+            await page.keyboard.press("Enter");
+          } else if (action === "middle") {
+            await link.click({ button: "middle" });
+          } else if (action === "control") {
+            await link.click({ modifiers: ["Control"] });
+          } else await link.click();
+          assert.deepEqual(
+            await page.evaluate(() =>
+              window.__calls
+                .filter((c) => c.command === "plugin:opener|open_url")
+                .map((c) => c.args.url),
+            ),
+            [url],
+          );
+          assert.equal(page.url(), settingsUrl);
+          assert.equal(page.context().pages().length, 1);
+        }
+        await page.evaluate(() => (window.__openerError = true));
+        await link.click();
+        await page
+          .getByText("BROWSER_OPEN_FAILED_FIXTURE", { exact: true })
+          .first()
+          .waitFor();
+        await page.evaluate(() => (window.__openerError = false));
+        await card.locator("summary").click();
+      }
       const cgInput = page.locator("#entry"),
         srInput = page.locator("#serena-entry");
       await cgInput.fill(

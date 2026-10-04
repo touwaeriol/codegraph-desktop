@@ -61,6 +61,7 @@ import {
   EmptyMedia,
 } from "@/components/ui/empty";
 import { call, desktop, message, subscribe } from "@/lib/ipc";
+import { ExternalLink } from "@/components/ExternalLink";
 import type {
   Environment,
   Project,
@@ -1474,14 +1475,12 @@ function SettingsForm({
               )}
               <details className="engine-install">
                 <summary>{t("安装说明")}</summary>
-                <a
+                <ExternalLink
                   className="text-primary text-sm underline"
                   href="https://github.com/colbymchenry/codegraph"
-                  target="_blank"
-                  rel="noreferrer"
                 >
                   {t("CodeGraph 官方项目与安装说明 ↗")}
-                </a>
+                </ExternalLink>
               </details>
             </Field>
           </EngineSettingsCard>

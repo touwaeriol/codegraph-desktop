@@ -15,6 +15,7 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { call, desktop, message } from "@/lib/ipc";
+import { ExternalLink } from "@/components/ExternalLink";
 import {
   EngineRuntimeCard,
   EngineConnectionCard,
@@ -294,14 +295,12 @@ export function SerenaSettings({ entry: initial }: { entry?: string | null }) {
           <code className="install-command">
             uv tool install -p 3.13 serena-agent
           </code>
-          <a
+          <ExternalLink
             href="https://oraios.github.io/serena/02-usage/010_installation.html"
-            target="_blank"
-            rel="noreferrer"
             className="text-primary text-sm underline"
           >
             {t("Serena 官方安装说明 ↗")}
-          </a>
+          </ExternalLink>
         </details>
       </Field>
     </EngineSettingsCard>

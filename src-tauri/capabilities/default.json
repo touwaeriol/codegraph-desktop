@@ -1,1 +1,18 @@
-{ "identifier": "main-capability", "description": "仅主窗口可调用本地受约束命令与目录选择器", "windows": ["main"], "permissions": ["core:default", "dialog:allow-open"] }
+{
+  "identifier": "main-capability",
+  "description": "仅主窗口可调用本地受约束命令、目录选择器与官方安装文档",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://github.com/colbymchenry/codegraph" },
+        {
+          "url": "https://oraios.github.io/serena/02-usage/010_installation.html"
+        }
+      ]
+    }
+  ]
+}
