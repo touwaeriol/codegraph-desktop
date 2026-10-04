@@ -3,6 +3,38 @@ use crate::persistence::HttpBinding;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, io::Write, path::Path};
+pub trait HttpTarget {
+    fn name(&self) -> &str;
+    fn endpoint(&self) -> String;
+    fn auth(&self) -> Option<String>;
+}
+impl HttpTarget for HttpBinding {
+    fn name(&self) -> &str {
+        "codegraph"
+    }
+    fn endpoint(&self) -> String {
+        self.endpoint()
+    }
+    fn auth(&self) -> Option<String> {
+        Some(self.authorization())
+    }
+}
+pub struct Target {
+    pub name: String,
+    pub endpoint: String,
+    pub authorization: Option<String>,
+}
+impl HttpTarget for Target {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn endpoint(&self) -> String {
+        self.endpoint.clone()
+    }
+    fn auth(&self) -> Option<String> {
+        self.authorization.clone()
+    }
+}
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ConfigMode {
@@ -82,9 +114,6 @@ struct BackupFile {
 pub fn hash(b: &[u8]) -> String {
     format!("{:x}", Sha256::digest(b))
 }
-pub fn service_name(_id: &str) -> String {
-    "codegraph".into()
-}
 fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     match std::fs::read(path) {
         Ok(b) => Ok(Some(b)),
@@ -125,7 +154,7 @@ fn merge(
     client: &str,
     name: &str,
     _id: &str,
-    binding: &HttpBinding,
+    binding: &impl HttpTarget,
     remove: bool,
 ) -> Result<(String, bool, Option<String>)> {
     if client == "codex" {
@@ -154,9 +183,11 @@ fn merge(
             }
             let mut t = toml_edit::Table::new();
             t["url"] = toml_edit::value(binding.endpoint());
-            let mut headers = toml_edit::Table::new();
-            headers["Authorization"] = toml_edit::value(binding.authorization());
-            t["http_headers"] = toml_edit::Item::Table(headers);
+            if let Some(auth) = binding.auth() {
+                let mut headers = toml_edit::Table::new();
+                headers["Authorization"] = toml_edit::value(auth);
+                t["http_headers"] = toml_edit::Item::Table(headers);
+            }
             t["startup_timeout_sec"] = toml_edit::value(30);
             t["tool_timeout_sec"] = toml_edit::value(120);
             doc["mcp_servers"][name] = toml_edit::Item::Table(t);
@@ -188,10 +219,13 @@ fn merge(
         if remove {
             servers.remove(name);
         } else {
-            servers.insert(
-                name.into(),
-                serde_json::json!({"type":"http","url":binding.endpoint(),"headers":{"Authorization":binding.authorization()}}),
-            );
+            servers.insert(name.into(), {
+                let mut value = serde_json::json!({"type":"http","url":binding.endpoint()});
+                if let Some(auth) = binding.auth() {
+                    value["headers"] = serde_json::json!({"Authorization":auth});
+                }
+                value
+            });
         }
         Ok((
             format!("{}\n", serde_json::to_string_pretty(&doc).unwrap()),
@@ -253,7 +287,7 @@ pub fn preview(
     p: &Project,
     clients: &[String],
     action: &str,
-    binding: &HttpBinding,
+    binding: &impl HttpTarget,
     managed: &HashMap<String, String>,
 ) -> Result<ConfigPreview> {
     preview_with_overrides(p, clients, action, binding, managed, &[])
@@ -262,7 +296,7 @@ pub fn preview_with_overrides(
     p: &Project,
     clients: &[String],
     action: &str,
-    binding: &HttpBinding,
+    binding: &impl HttpTarget,
     managed: &HashMap<String, String>,
     overrides: &[ConfigOverride],
 ) -> Result<ConfigPreview> {
@@ -292,7 +326,7 @@ pub fn preview_with_overrides(
     }
     let mut files = Vec::new();
     let root = Path::new(&p.canonical_path);
-    let name = service_name(&p.id);
+    let name = binding.name().to_string();
     for client in clients {
         if files.iter().any(|f: &ConfigFile| &f.client == client) {
             continue;
@@ -342,7 +376,11 @@ pub fn preview_with_overrides(
             ));
         }
         let legacy_name = format!("codegraph_project_{}", p.id.replace('-', ""));
-        let legacy_hash = entry_fingerprint(&before, client, &legacy_name)?;
+        let legacy_hash = if binding.name() == "codegraph" {
+            entry_fingerprint(&before, client, &legacy_name)?
+        } else {
+            None
+        };
         let merge_input = if let Some(ref legacy_hash) = legacy_hash {
             if managed.get(client) != Some(legacy_hash) {
                 return Err(AppError::new(
@@ -552,7 +590,7 @@ fn apply_with(
             .collect(),
     })
 }
-pub fn status(p: &Project, binding: &HttpBinding) -> Vec<ConfigStatus> {
+pub fn status(p: &Project, binding: &impl HttpTarget) -> Vec<ConfigStatus> {
     ["codex", "claude"]
         .iter()
         .map(|client| {
@@ -579,7 +617,7 @@ pub fn status(p: &Project, binding: &HttpBinding) -> Vec<ConfigStatus> {
                         "现有 Claude Code JSON 文件为空",
                     ));
                 }
-                let (name, id) = (service_name(&p.id), &p.id);
+                let (name, id) = (binding.name().to_string(), &p.id);
                 validate_content(&before, client)?;
                 if entry_fingerprint(&before, client, &name)?.is_some() {
                     item.state =
@@ -589,7 +627,7 @@ pub fn status(p: &Project, binding: &HttpBinding) -> Vec<ConfigStatus> {
                             "repair"
                         }
                         .into();
-                } else if entry_fingerprint(
+                } else if binding.name() == "codegraph" && entry_fingerprint(
                     &before,
                     client,
                     &format!("codegraph_project_{}", p.id.replace('-', "")),
@@ -744,11 +782,21 @@ pub fn list_backups(data: &Path, project_id: &str) -> Result<Vec<BackupSummary>>
     }
     Ok(result)
 }
+pub fn backup_service(data: &Path, operation_id: &str) -> Result<String> {
+    uuid::Uuid::parse_str(operation_id).map_err(|e| AppError::new("INVALID_OPERATION", e))?;
+    let manifest: Backup = serde_json::from_slice(&std::fs::read(
+        data.join("backups")
+            .join(operation_id)
+            .join("manifest.json"),
+    )?)
+    .map_err(|_| AppError::new("BACKUP_CORRUPT", "备份清单格式无效"))?;
+    Ok(manifest.service_name)
+}
 pub fn preview_restore(
     data: &Path,
     operation_id: &str,
     p: &Project,
-    binding: &HttpBinding,
+    binding: &impl HttpTarget,
 ) -> Result<ConfigPreview> {
     uuid::Uuid::parse_str(operation_id).map_err(|e| AppError::new("INVALID_OPERATION", e))?;
     let path = data
@@ -1145,11 +1193,11 @@ fn managed_fingerprint(
     client: &str,
     name: &str,
     _id: &str,
-    binding: &HttpBinding,
+    binding: &impl HttpTarget,
 ) -> Result<Option<String>> {
     let content = content.trim_start_matches('\u{feff}');
     let endpoint = binding.endpoint();
-    let authorization = binding.authorization();
+    let authorization = binding.auth();
     let owned = match client {
         "codex" => {
             let doc = content
@@ -1168,7 +1216,7 @@ fn managed_fingerprint(
                             .and_then(|v| v.as_table_like())
                             .and_then(|v| v.get("Authorization"))
                             .and_then(|v| v.as_str())
-                            == Some(authorization.as_str())
+                            == authorization.as_deref()
                 })
         }
         "claude" => {
@@ -1185,7 +1233,7 @@ fn managed_fingerprint(
                             .get("headers")
                             .and_then(|v| v.get("Authorization"))
                             .and_then(|v| v.as_str())
-                            == Some(authorization.as_str())
+                            == authorization.as_deref()
                 })
         }
         _ => false,
@@ -1200,6 +1248,57 @@ fn managed_fingerprint(
 #[cfg(test)]
 mod override_tests {
     use super::*;
+    #[test]
+    fn serena_configuration_preserves_codegraph_and_tracks_separate_ownership() {
+        let (_dir, p, codegraph) = fixture();
+        let data = tempfile::tempdir().unwrap();
+        let clients = vec!["codex".into(), "claude".into()];
+        let cg = preview(&p, &clients, "install", &codegraph, &HashMap::new()).unwrap();
+        apply(&cg, Path::new(&p.canonical_path), data.path()).unwrap();
+        let serena = Target {
+            name: "serena".into(),
+            endpoint: "http://127.0.0.1:58310/mcp".into(),
+            authorization: None,
+        };
+        let change = preview(&p, &clients, "install", &serena, &HashMap::new()).unwrap();
+        let owned: HashMap<_, _> = change
+            .files
+            .iter()
+            .map(|f| (f.client.clone(), f.fingerprint.clone().unwrap()))
+            .collect();
+        for (before, after) in cg.files.iter().zip(&change.files) {
+            assert_eq!(
+                entry_fingerprint(&before.after, &before.client, "codegraph").unwrap(),
+                entry_fingerprint(&after.after, &after.client, "codegraph").unwrap()
+            );
+            assert!(after.after.contains(&serena.endpoint));
+        }
+        let result = apply(&change, Path::new(&p.canonical_path), data.path()).unwrap();
+        assert!(status(&p, &serena).iter().all(|s| s.state == "configured"));
+        assert!(status(&p, &codegraph)
+            .iter()
+            .all(|s| s.state == "configured"));
+        let restore = preview_restore(data.path(), &result.operation_id, &p, &serena).unwrap();
+        assert_eq!(restore.service_name, "serena");
+        assert!(restore.files.iter().all(|f| f.fingerprint.is_none()));
+        let remove = preview(&p, &clients, "remove", &serena, &owned).unwrap();
+        for f in &remove.files {
+            assert!(entry_fingerprint(&f.after, &f.client, "serena")
+                .unwrap()
+                .is_none());
+            assert!(entry_fingerprint(&f.after, &f.client, "codegraph")
+                .unwrap()
+                .is_some());
+        }
+        // A hand-edited service must not be removed using previous ownership.
+        std::fs::write(
+            &change.files[0].path,
+            change.files[0].after.replace("58310", "58311"),
+        )
+        .unwrap();
+        assert!(preview(&p, &clients, "remove", &serena, &owned).is_err());
+        assert!(apply(&remove, Path::new(&p.canonical_path), data.path()).is_err());
+    }
     fn fixture() -> (tempfile::TempDir, Project, HttpBinding) {
         let dir = tempfile::tempdir().unwrap();
         let binding = test_binding();
@@ -1230,7 +1329,7 @@ mod override_tests {
     }
     fn overridden(
         p: &Project,
-        binding: &HttpBinding,
+        binding: &impl HttpTarget,
         client: &str,
         mode: ConfigMode,
         content: Option<String>,
@@ -1528,7 +1627,7 @@ mod http_config_tests {
             assert!(!a.after.contains("command"));
             assert!(!a.after.contains("args"));
             assert!(a.after.contains(&binding.endpoint()));
-            assert!(a.after.contains(&binding.authorization()));
+            assert!(a.after.contains(&binding.auth().unwrap_or_default()));
             assert!(a.fingerprint.is_some());
         }
         let doc = first.files[0]
@@ -1541,7 +1640,7 @@ mod http_config_tests {
         );
         assert!(
             doc["mcp_servers"]["codegraph"]["http_headers"]["Authorization"].as_str()
-                == Some(binding.authorization().as_str())
+                == Some(binding.auth().unwrap_or_default().as_str())
         );
         let json: serde_json::Value = serde_json::from_str(&first.files[1].after).unwrap();
         assert_eq!(json["mcpServers"]["codegraph"]["type"], "http");
@@ -1607,7 +1706,7 @@ mod http_config_tests {
         let broken = format!(
             "[mcp_servers.codegraph]\nurl='{}'\nhttp_headers={{Authorization='{}'\n",
             binding.endpoint(),
-            binding.authorization()
+            binding.auth().unwrap_or_default()
         );
         let error = validate_content(&broken, "codex").err().unwrap();
         assert!(!error.message.contains(&binding.token));

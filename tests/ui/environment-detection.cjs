@@ -43,6 +43,7 @@ const fs = require("node:fs");
           },
           unregisterCallback() {},
           async invoke(command, args = {}) {
+            if (command === "list_serena_snapshots") return {};
             window.__detection.calls.push({ command, args });
             if (command.startsWith("plugin:event|")) return ++sequence;
             if (command === "list_projects") return [project];

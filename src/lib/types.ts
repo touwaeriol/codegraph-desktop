@@ -31,6 +31,7 @@ export interface RuntimeSnapshot {
 export interface Settings {
   language: "en" | "zh-CN";
   codegraphEntry: string | null;
+  serenaEntry?: string | null;
   indexConcurrency: number;
   closeBehavior: "tray" | "exit";
   appDataDir: string;
@@ -87,3 +88,12 @@ export interface ConfigStatus {
   message: string | null;
 }
 export type Client = "codex" | "claude";
+export type Engine = "codegraph" | "serena";
+export interface SerenaSnapshot {
+  state: RuntimeSnapshot["state"];
+  pid: number | null;
+  endpoint: string | null;
+  startedAt: string | null;
+  tools: string[];
+  error: { code: string; message: string } | null;
+}

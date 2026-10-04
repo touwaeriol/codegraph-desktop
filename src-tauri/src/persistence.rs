@@ -14,7 +14,7 @@ pub fn open(dir: &Path) -> Result<Connection> {
         ));
     }
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version > 3 {
+    if version > 4 {
         return Err(AppError::new(
             "DATABASE_VERSION",
             "数据库版本较新，请升级应用",
@@ -23,6 +23,7 @@ pub fn open(dir: &Path) -> Result<Connection> {
     let tx = db.transaction()?;
     tx.execute_batch("CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, canonical_key TEXT UNIQUE NOT NULL, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS managed_config(project_id TEXT NOT NULL, client TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(project_id,client)); CREATE TABLE IF NOT EXISTS project_http(project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE, port INTEGER UNIQUE NOT NULL CHECK(port > 0 AND port <= 65535), token TEXT NOT NULL); PRAGMA user_version=2;")?;
     tx.execute_batch("CREATE TABLE IF NOT EXISTS shared_http(id INTEGER PRIMARY KEY CHECK(id=1), port INTEGER NOT NULL CHECK(port > 0 AND port <= 65535)); CREATE TABLE IF NOT EXISTS http_migration_pending(project_id TEXT NOT NULL, client TEXT NOT NULL, old_fingerprint TEXT NOT NULL, new_fingerprint TEXT NOT NULL, PRIMARY KEY(project_id,client)); PRAGMA user_version=3;")?;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS serena_http(project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE, port INTEGER UNIQUE NOT NULL CHECK(port > 0 AND port <= 65535)); PRAGMA user_version=4;")?;
     tx.commit()?;
     Ok(db)
 }
@@ -55,10 +56,24 @@ pub fn ensure_shared_http_port(db: &mut Connection) -> Result<u16> {
     let port = if let Some(port) = existing {
         port
     } else {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-        let port = listener.local_addr()?.port();
-        tx.execute("INSERT INTO shared_http(id,port) VALUES(1,?1)", [port])?;
-        port
+        let mut selected = None;
+        for _ in 0..32 {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+            let port = listener.local_addr()?.port();
+            let reserved: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM serena_http WHERE port=?1)",
+                [port],
+                |r| r.get(0),
+            )?;
+            if !reserved {
+                tx.execute("INSERT INTO shared_http(id,port) VALUES(1,?1)", [port])?;
+                selected = Some(port);
+                break;
+            }
+        }
+        selected.ok_or_else(|| {
+            AppError::new("PORT_UNAVAILABLE", "No free shared HTTP port available")
+        })?
     };
     tx.commit()?;
     Ok(port)
@@ -364,7 +379,7 @@ mod http_binding_tests {
         let version: i64 = upgraded
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
     }
 }
 

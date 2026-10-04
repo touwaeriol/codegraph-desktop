@@ -73,6 +73,7 @@ import type {
   Settings,
   TaskProgress,
 } from "@/lib/types";
+import { SerenaPanel, SerenaSettings, useSerena } from "./Serena";
 import { ProjectTools } from "./ProjectTools";
 import { Elapsed } from "@/components/Elapsed";
 import packageInfo from "../../package.json";
@@ -157,6 +158,8 @@ export default function App() {
       detail: string;
       action: () => Promise<void>;
     } | null>(null);
+  const [engine, setEngine] = useState<"codegraph" | "serena">("codegraph");
+  const serena = useSerena(selected);
   const searchRef = useRef<HTMLInputElement>(null);
   const [section, setSection] = useState<"project" | "settings">("project");
   const [settingsError, setSettingsError] = useState("");
@@ -428,6 +431,8 @@ export default function App() {
       projects.map(async (p) => {
         try {
           await call(`${action}_project`, { projectId: p.id });
+          if (action === "stop")
+            await call("serena_operation", { projectId: p.id, action: "stop" });
           return {
             projectId: p.id,
             action,
@@ -454,7 +459,9 @@ export default function App() {
     .filter(
       (p) =>
         `${p.name} ${p.rootPath}`.toLowerCase().includes(query.toLowerCase()) &&
-        (filter !== "running" || snapshots[p.id]?.state === "running"),
+        (filter !== "running" ||
+          snapshots[p.id]?.state === "running" ||
+          serena.snapshots[p.id]?.state === "running"),
     )
     .sort((a, b) =>
       sort === "recent"
@@ -501,8 +508,11 @@ export default function App() {
                 {projects.length}
                 {t("· 运行中")}{" "}
                 {
-                  Object.values(snapshots).filter((s) => s.state === "running")
-                    .length
+                  projects.filter(
+                    (p) =>
+                      snapshots[p.id]?.state === "running" ||
+                      serena.snapshots[p.id]?.state === "running",
+                  ).length
                 }
               </span>
               <DropdownMenu>
@@ -521,7 +531,7 @@ export default function App() {
                       disabled={busy || !projects.length}
                       onClick={() => void batchRuntime("start")}
                     >
-                      {t("启动全部项目")}
+                      {t("启动全部 CodeGraph")}
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       disabled={busy || !projects.length}
@@ -575,7 +585,20 @@ export default function App() {
                   <Folder size={16} />
                   <span className="truncate">{p.name}</span>
                 </div>
-                <Status snapshot={snapshots[p.id]} />
+                <div className="flex flex-wrap gap-1 items-center">
+                  <span className="text-[10px] text-muted-foreground">CG</span>
+                  <Status snapshot={snapshots[p.id]} />
+                  {serena.snapshots[p.id] && (
+                    <>
+                      <span className="text-[10px] text-muted-foreground ml-1">
+                        Serena
+                      </span>
+                      <Badge variant="secondary">
+                        {stateNames()[serena.snapshots[p.id].state]}
+                      </Badge>
+                    </>
+                  )}
+                </div>
                 <div
                   className="mono text-[11px] text-muted-foreground truncate mt-2"
                   title={p.rootPath}
@@ -781,7 +804,12 @@ export default function App() {
                         </Button>
                       </div>
                     </div>
-                    <div className="toolbar">
+                    <div
+                      className="toolbar"
+                      style={
+                        engine === "serena" ? { display: "none" } : undefined
+                      }
+                    >
                       {snapshot?.state === "running" ? (
                         <>
                           <Button
@@ -831,7 +859,12 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 mt-3 text-xs text-muted-foreground">
+                  <div
+                    className="flex items-center gap-3 mt-3 text-xs text-muted-foreground"
+                    style={
+                      engine === "serena" ? { display: "none" } : undefined
+                    }
+                  >
                     <Status snapshot={snapshot} />
                     <span>
                       {snapshot
@@ -849,9 +882,16 @@ export default function App() {
                 </header>
                 <div className="content space-y-4">
                   <ErrorNotice
-                    error={error || snapshot?.error?.message || ""}
+                    error={
+                      error ||
+                      (engine === "codegraph"
+                        ? snapshot?.error?.message
+                        : "") ||
+                      ""
+                    }
                   />
-                  {environment &&
+                  {engine === "codegraph" &&
+                    environment &&
                     (!environment.available || environment.error) && (
                       <Alert>
                         <TriangleAlert />
@@ -869,6 +909,50 @@ export default function App() {
                         </AlertDescription>
                       </Alert>
                     )}
+                  <div
+                    className="engine-picker"
+                    role="group"
+                    aria-label={t("项目引擎")}
+                  >
+                    <button
+                      aria-pressed={engine === "codegraph"}
+                      onClick={() => {
+                        setEngine("codegraph");
+                        changeTab("overview");
+                      }}
+                    >
+                      <span className="engine-symbol">
+                        <GitBranch size={20} />
+                      </span>
+                      <span>
+                        <strong>CodeGraph</strong>
+                        <small>{t("代码图谱与关系检索")}</small>
+                      </span>
+                      <Badge variant="secondary">
+                        {snapshot
+                          ? stateNames()[snapshot.state]
+                          : t("尚未获取")}
+                      </Badge>
+                    </button>
+                    <button
+                      aria-pressed={engine === "serena"}
+                      onClick={() => {
+                        setEngine("serena");
+                        changeTab("overview");
+                      }}
+                    >
+                      <span className="engine-symbol serena">
+                        <Terminal size={20} />
+                      </span>
+                      <span>
+                        <strong>Serena</strong>
+                        <small>{t("符号搜索与语义编辑")}</small>
+                      </span>
+                      <Badge variant="secondary">
+                        {stateNames()[serena.snapshot.state]}
+                      </Badge>
+                    </button>
+                  </div>
                   <Tabs value={tab} onValueChange={changeTab}>
                     <TabsList className="mb-5">
                       <TabsTrigger value="overview">{t("概览")}</TabsTrigger>
@@ -876,200 +960,214 @@ export default function App() {
                       <TabsTrigger value="logs">{t("运行日志")}</TabsTrigger>
                     </TabsList>
                     <TabsContent value="overview">
-                      <div className="panel-grid">
-                        <Card>
-                          <CardHeader className="flex-row justify-between">
-                            <div>
-                              <CardTitle className="flex items-center gap-2">
-                                <Activity size={17} />
-                                {t("实例")}
-                              </CardTitle>
-                              <CardDescription className="mt-2">
-                                {t("当前项目独立的进程与共享网关路由")}
-                              </CardDescription>
-                            </div>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              aria-label={t("刷新状态")}
-                              disabled={busy}
-                              onClick={() =>
-                                void run(() =>
-                                  call("refresh_index_status", {
-                                    projectId: selected,
-                                  }),
-                                )
-                              }
-                            >
-                              <RefreshCw size={16} />
-                            </Button>
-                          </CardHeader>
-                          <CardContent>
-                            <div className="metrics">
-                              <Metric
-                                name={t("运行状态")}
-                                value={
-                                  snapshot
-                                    ? stateNames()[snapshot.state]
-                                    : t("尚未获取")
-                                }
-                              />
-                              <Metric
-                                name={t("本机端口")}
-                                value={snapshot?.port ?? t("尚未获取固定端口")}
-                              />
-                              <Metric
-                                name={t("进程 PID")}
-                                value={snapshot?.pid ?? "—"}
-                              />
-                              <Metric
-                                name={t("最近启动")}
-                                value={
-                                  snapshot?.startedAt
-                                    ? new Date(
-                                        snapshot.startedAt,
-                                      ).toLocaleString(language)
-                                    : "—"
-                                }
-                              />
-                              <Metric
-                                name={t("客户端会话")}
-                                value={snapshot?.sessions ?? t("尚未获取")}
-                              />
-                              {snapshot?.startedAt &&
-                                snapshot.state === "running" && (
-                                  <div>
-                                    <div className="metric-label">
-                                      {t("运行时长")}
-                                    </div>
-                                    <Elapsed since={snapshot.startedAt} />
-                                  </div>
-                                )}
-                              <Metric
-                                name={t("入口版本")}
-                                value={environment?.version ?? t("尚未获取")}
-                              />
-                            </div>
-                          </CardContent>
-                        </Card>
-                        <Card>
-                          <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                              <GitBranch size={17} />
-                              {t("代码索引")}
-                            </CardTitle>
-                            <CardDescription>
-                              {t("统计与可用性以 CodeGraph 的实际结果为准")}
-                            </CardDescription>
-                          </CardHeader>
-                          <CardContent>
-                            <div className="metrics">
-                              <Metric
-                                name={t("索引状态")}
-                                value={
-                                  snapshot
-                                    ? indexNames()[snapshot.indexState]
-                                    : t("尚未获取")
-                                }
-                              />
-                              <Metric
-                                name={t("已索引文件")}
-                                value={
-                                  snapshot?.indexStats?.fileCount ??
-                                  t("尚未获取")
-                                }
-                              />
-                              <Metric
-                                name={t("图谱节点")}
-                                value={
-                                  snapshot?.indexStats?.nodeCount ??
-                                  t("尚未获取")
-                                }
-                              />
-                              <Metric
-                                name={t("图谱关系")}
-                                value={
-                                  snapshot?.indexStats?.edgeCount ??
-                                  t("尚未获取")
-                                }
-                              />
-                              {snapshot?.indexStats?.checkedAt && (
-                                <Metric
-                                  name={t("统计获取时间")}
-                                  value={new Date(
-                                    snapshot.indexStats.checkedAt,
-                                  ).toLocaleString(language)}
-                                />
-                              )}
-                            </div>
-                            <p className="text-xs text-muted-foreground my-6">
-                              {t(
-                                "运行期间同步或重建会短暂断开客户端，完成后恢复实例。",
-                              )}
-                            </p>
-                            <div className="toolbar">
+                      {engine === "serena" ? (
+                        <SerenaPanel
+                          runtime={serena}
+                          settings={openSettings}
+                          configure={() => changeTab("config")}
+                        />
+                      ) : (
+                        <div className="panel-grid">
+                          <Card>
+                            <CardHeader className="flex flex-row justify-between">
+                              <div>
+                                <CardTitle className="flex items-center gap-2">
+                                  <Activity size={17} />
+                                  CodeGraph
+                                </CardTitle>
+                                <CardDescription className="mt-2">
+                                  {t("当前项目独立的进程与共享网关路由")}
+                                </CardDescription>
+                              </div>
                               <Button
-                                variant="outline"
-                                disabled={busy || !environment?.available}
+                                variant="ghost"
+                                size="icon"
+                                aria-label={t("刷新状态")}
+                                disabled={busy}
                                 onClick={() =>
-                                  void indexing(
-                                    snapshot?.indexState === "missing"
-                                      ? "init"
-                                      : "sync",
+                                  void run(() =>
+                                    call("refresh_index_status", {
+                                      projectId: selected,
+                                    }),
                                   )
                                 }
                               >
-                                <RefreshCw />
-                                {snapshot?.indexState === "missing"
-                                  ? t("初始化索引")
-                                  : t("增量同步")}
+                                <RefreshCw size={16} />
                               </Button>
-                              <Button
-                                variant="ghost"
-                                disabled={busy || !environment?.available}
-                                onClick={() => void indexing("rebuild")}
-                              >
-                                {t("重建索引")}
-                              </Button>
-                            </div>
-                          </CardContent>
-                        </Card>
-                        <Card className="col-span-full">
-                          <CardHeader>
-                            <CardTitle>{t("客户端接入")}</CardTitle>
-                            <CardDescription>
-                              {t("Codex 与 Claude Code 共用当前项目的一个实例")}
-                            </CardDescription>
-                          </CardHeader>
-                          <CardContent className="flex justify-between items-center gap-4 flex-wrap">
-                            <p className="text-sm text-muted-foreground">
-                              {t(
-                                "配置写入、独立连接测试与真实客户端会话分别验证。",
-                              )}
-                            </p>
-                            <Button
-                              variant="outline"
-                              onClick={() => changeTab("config")}
-                            >
-                              {t("配置客户端")}
-                              <ArrowRight />
-                            </Button>
-                          </CardContent>
-                        </Card>
-                        {project.notes && (
-                          <Card className="col-span-full">
-                            <CardHeader>
-                              <CardTitle>{t("项目备注")}</CardTitle>
                             </CardHeader>
-                            <CardContent className="whitespace-pre-wrap text-muted-foreground">
-                              {project.notes}
+                            <CardContent>
+                              <div className="metrics">
+                                <Metric
+                                  name={t("运行状态")}
+                                  value={
+                                    snapshot
+                                      ? stateNames()[snapshot.state]
+                                      : t("尚未获取")
+                                  }
+                                />
+                                <Metric
+                                  name={t("本机端口")}
+                                  value={
+                                    snapshot?.port ?? t("尚未获取固定端口")
+                                  }
+                                />
+                                <Metric
+                                  name={t("进程 PID")}
+                                  value={snapshot?.pid ?? "—"}
+                                />
+                                <Metric
+                                  name={t("最近启动")}
+                                  value={
+                                    snapshot?.startedAt
+                                      ? new Date(
+                                          snapshot.startedAt,
+                                        ).toLocaleString(language)
+                                      : "—"
+                                  }
+                                />
+                                <Metric
+                                  name={t("客户端会话")}
+                                  value={snapshot?.sessions ?? t("尚未获取")}
+                                />
+                                {snapshot?.startedAt &&
+                                  snapshot.state === "running" && (
+                                    <div>
+                                      <div className="metric-label">
+                                        {t("运行时长")}
+                                      </div>
+                                      <Elapsed since={snapshot.startedAt} />
+                                    </div>
+                                  )}
+                                <Metric
+                                  name={t("入口版本")}
+                                  value={environment?.version ?? t("尚未获取")}
+                                />
+                              </div>
                             </CardContent>
                           </Card>
-                        )}
-                      </div>
+                          <Card>
+                            <CardHeader>
+                              <CardTitle className="flex items-center gap-2">
+                                <GitBranch size={17} />
+                                {t("代码索引")}
+                              </CardTitle>
+                              <CardDescription>
+                                {t("统计与可用性以 CodeGraph 的实际结果为准")}
+                              </CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                              <div className="metrics">
+                                <Metric
+                                  name={t("索引状态")}
+                                  value={
+                                    snapshot
+                                      ? indexNames()[snapshot.indexState]
+                                      : t("尚未获取")
+                                  }
+                                />
+                                <Metric
+                                  name={t("已索引文件")}
+                                  value={
+                                    snapshot?.indexStats?.fileCount ??
+                                    t("尚未获取")
+                                  }
+                                />
+                                <Metric
+                                  name={t("图谱节点")}
+                                  value={
+                                    snapshot?.indexStats?.nodeCount ??
+                                    t("尚未获取")
+                                  }
+                                />
+                                <Metric
+                                  name={t("图谱关系")}
+                                  value={
+                                    snapshot?.indexStats?.edgeCount ??
+                                    t("尚未获取")
+                                  }
+                                />
+                                {snapshot?.indexStats?.checkedAt && (
+                                  <Metric
+                                    name={t("统计获取时间")}
+                                    value={new Date(
+                                      snapshot.indexStats.checkedAt,
+                                    ).toLocaleString(language)}
+                                  />
+                                )}
+                              </div>
+                              <p className="text-xs text-muted-foreground my-6">
+                                {t(
+                                  "运行期间同步或重建会短暂断开客户端，完成后恢复实例。",
+                                )}
+                              </p>
+                              <div className="toolbar">
+                                <Button
+                                  variant="outline"
+                                  disabled={busy || !environment?.available}
+                                  onClick={() =>
+                                    void indexing(
+                                      snapshot?.indexState === "missing"
+                                        ? "init"
+                                        : "sync",
+                                    )
+                                  }
+                                >
+                                  <RefreshCw />
+                                  {snapshot?.indexState === "missing"
+                                    ? t("初始化索引")
+                                    : t("增量同步")}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  disabled={busy || !environment?.available}
+                                  onClick={() => void indexing("rebuild")}
+                                >
+                                  {t("重建索引")}
+                                </Button>
+                              </div>
+                            </CardContent>
+                          </Card>
+                          <Card className="col-span-full">
+                            <CardHeader>
+                              <CardTitle>{t("客户端接入")}</CardTitle>
+                              <CardDescription>
+                                {t(
+                                  "Codex 与 Claude Code 共用当前项目的一个实例",
+                                )}
+                              </CardDescription>
+                            </CardHeader>
+                            <CardContent className="flex justify-between items-center gap-4 flex-wrap">
+                              <p className="text-sm text-muted-foreground">
+                                {t(
+                                  "配置写入、独立连接测试与真实客户端会话分别验证。",
+                                )}
+                              </p>
+                              <Button
+                                variant="outline"
+                                onClick={() => changeTab("config")}
+                              >
+                                {t("配置客户端")}
+                                <ArrowRight />
+                              </Button>
+                            </CardContent>
+                          </Card>
+                          {project.notes && (
+                            <Card className="col-span-full">
+                              <CardHeader>
+                                <CardTitle>{t("项目备注")}</CardTitle>
+                              </CardHeader>
+                              <CardContent className="whitespace-pre-wrap text-muted-foreground">
+                                {project.notes}
+                              </CardContent>
+                            </Card>
+                          )}
+                        </div>
+                      )}
                     </TabsContent>
                     <ProjectTools
-                      key={selected}
+                      key={`${selected}:${engine}`}
+                      engine={engine}
+                      serena={serena.snapshot}
                       project={project}
                       snapshot={snapshot}
                       tab={tab}
@@ -1225,7 +1323,9 @@ export default function App() {
                   ? t(
                       "项目 ID 保持不变。先停止当前实例，再检测新目录；客户端配置需重新预览。",
                     )
-                  : t("每个项目拥有独立索引和运行实例，通过共享网关的项目路由连接。")}
+                  : t(
+                      "每个项目拥有独立索引和运行实例，通过共享网关的项目路由连接。",
+                    )}
             </DialogDescription>
           </DialogHeader>
           <ErrorNotice error={modalError} />
@@ -1492,6 +1592,7 @@ function SettingsForm({
           </Alert>
         )}
       </Field>
+      <SerenaSettings entry={settings?.serenaEntry} />
       <Field>
         <FieldLabel htmlFor="concurrency">{t("索引任务并发数")}</FieldLabel>
         <Input

@@ -1,5 +1,39 @@
 // Chinese source messages are typed keys. Raw project and upstream text never passes through this catalog.
 export const english = {
+  "启动全部 CodeGraph": "Start all CodeGraph instances",
+  项目引擎: "Project engines",
+  代码图谱与关系检索: "Code graph & relationships",
+  符号搜索与语义编辑: "Symbols & semantic editing",
+  "符号搜索、引用分析与语义编辑":
+    "Symbol search, references and semantic editing",
+  "启动 Serena": "Start Serena",
+  "停止 Serena": "Stop Serena",
+  可用工具: "Available tools",
+  复制服务地址: "Copy server URL",
+  已复制: "Copied",
+  查看可用工具: "View available tools",
+  语义代码工具: "Semantic code tools",
+  "Serena 使用独立的原生 HTTP 服务与单项目模式。首次启动可能需要准备语言服务器，可在运行日志中查看进度。":
+    "Serena runs its own native HTTP server in single-project mode. Initial startup may prepare language servers; follow progress in the logs.",
+  "按符号理解和修改代码，与 CodeGraph 的图谱检索互补。":
+    "Understand and edit code by symbol, alongside CodeGraph relationship search.",
+  "无需先初始化 CodeGraph 索引。Serena 按项目语言启动语言服务器，并维护自己的 .serena 项目配置。":
+    "No CodeGraph index is required. Serena starts language servers for your project and maintains its own .serena configuration.",
+  "为当前项目添加独立的 serena MCP 条目。":
+    "Add a separate serena MCP entry for this project.",
+  "Serena 入口": "Serena executable",
+  "可选引擎 · 符号搜索与语义编辑":
+    "Optional engine · symbols and semantic editing",
+  "检测 Serena 并使用": "Detect and use Serena",
+  "Serena 检测成功": "Serena detected successfully",
+  "安装 uv 后执行以下命令，然后检测入口。更换入口后需重启 Serena。":
+    "Install uv, run the command below, then detect the executable. Restart Serena after changing it.",
+  "Serena 官方安装说明 ↗": "Serena installation guide ↗",
+  "客户端 HTTP → 当前项目 Serena": "HTTP client → project Serena server",
+  "Serena 使用固定的独立本机端口，只监听 127.0.0.1。原生服务不使用 CodeGraph 的令牌；请仅供本机可信客户端使用。停止 Serena 或退出应用后连接不可用。":
+    "Serena uses its own fixed port on 127.0.0.1. Its native server does not use CodeGraph tokens; connect trusted local clients only. Connections end when Serena or the desktop app stops.",
+  "先在设置中检测 Serena，再为当前项目启动 Serena。在 MCP 配置页预览并添加 serena 条目，重新连接客户端。":
+    "Detect Serena in Settings, then start it for this project. Preview and add its serena entry in MCP configuration, then reconnect your client.",
   返回项目: "Back to projects",
   "CodeGraph 检测成功": "CodeGraph detected successfully",
   "实际入口：{0}": "Resolved entry: {0}",
@@ -94,7 +128,8 @@ export const english = {
   "MCP 配置": "MCP configuration",
   运行日志: "Logs",
   实例: "Instance",
-  当前项目独立的进程与共享网关路由: "A dedicated process and shared gateway route for this project",
+  当前项目独立的进程与共享网关路由:
+    "A dedicated process and shared gateway route for this project",
   刷新状态: "Refresh status",
   运行状态: "Runtime state",
   本机端口: "Local port",

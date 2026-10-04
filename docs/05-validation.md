@@ -155,3 +155,11 @@ Claude Code 原默认模型 `claude-fable-5` 返回中转服务 503（无可用�
 安装包：`target/release/bundle/nsis/CodeGraph Desktop_0.1.3_x64-setup.exe`，同目录提供 `.sha256`。SHA256：`9db4a766a34ffcb4dcc7613abccc8f9b8ba165abb2ad549e3ac4a1841e0a2a1b`。Authenticode 状态为 `NotSigned`，属于未签名开发构建。产物记录见 `tests/package-evidence.json`。
 
 真实客户端工具调用已按上述临时配置方式验证。首次项目信任、原生窗口逐控件操作、干净 Windows 安装/卸载与高 DPI 仍未完整验收，不能将这些项目视为通过。
+## v0.1.9 Serena 接入验证
+
+- Rust 工作区：48 项常规测试通过；新增两种引擎配置共存、Serena 固定端口持久化与项目切换工具拒绝测试。
+- 独立运行的真实 Serena 1.7.0 测试：两个临时 Python 项目原生 HTTP 握手、`find_symbol` 返回各自符号，关闭 A 后 B 仍可连接，关闭 B 后两个端口均不可用；进程树通过现有 Job/进程组机制停止。
+- Python 语言服务器依赖 uv。测试曾因本机已有 uv Python 路径损坏而失败；使用隔离的 `UV_PYTHON_INSTALL_DIR` 安装 Python 后通过。没有把此环境问题当作产品兼容性通过的证据。
+- 浏览器模拟 Tauri IPC：中英文 Serena 工作台、独立启动、客户端配置目标、入口检测失败与成功提示通过；原有语言、CodeGraph 检测、配置预览三个回归套件通过。截图以 1100×780 检查，原有回归保留 1000×680。
+- TypeScript/Vite、Rust fmt、clippy 严格检查通过。浏览器模拟不等同于原生 WebView 交互；macOS/Linux 的 Serena 真实运行尚未验收。
+- 手工运行真实测试：设置 `SERENA_TEST_ENTRY` 为已安装 Serena 的绝对可执行路径，并确保 uv 在 PATH 中，然后执行 `cargo test -p codegraph-desktop real_native_http_symbols_and_process_cleanup -- --ignored --nocapture`。测试在临时目录创建项目并指定独立 `SERENA_HOME`，不改动实际项目配置。

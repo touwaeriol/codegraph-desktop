@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A desktop project manager for CodeGraph, built with **Tauri 2 + React + TypeScript + Vite**.
+A desktop project manager for CodeGraph and Serena, built with **Tauri 2 + React + TypeScript + Vite**.
 
 Each project runs its own CodeGraph instance with a separate index, runtime state, logs, and authentication token. One local HTTP service routes `/mcp/{project-id}` to the corresponding instance. Codex and Claude Code use project-level MCP configuration.
 
@@ -47,6 +47,19 @@ The Windows installer automatically uses Simplified Chinese on Chinese-language 
 - After editing, refresh the preview. Syntax validation must pass before applying changes. Refreshing after an external editor changes the file preserves your draft in the preview window.
 - If the original configuration cannot be parsed, open a preview in overwrite mode, then switch to editing to repair it. Opening the preview does not write the file.
 - Applying a configuration backs up the original files and checks for external changes. Manually changing or removing the `codegraph` URL or authentication fields may disconnect that entry from the project and remove its managed status. Configuration contains local authentication credentials: do not upload or share these tokens.
+
+## Serena (optional)
+
+Choose **Serena** in a project's engine switcher to manage semantic symbol search, references and editing separately from CodeGraph. It does not require a CodeGraph index. The sidebar reports both engines independently.
+
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and run `uv tool install -p 3.13 serena-agent`, following the [official Serena installation guide](https://oraios.github.io/serena/02-usage/010_installation.html).
+2. In **Settings → Serena executable**, detect the executable or select it manually. Detection validates the CLI before saving it.
+3. Select a project, choose **Serena**, and click **Start Serena**. First use may download language-server dependencies; inspect **Logs** if startup or tools fail. Language-specific dependencies remain Serena's responsibility.
+4. Under **MCP configuration**, preview and apply the separate `serena` entry. Default merging preserves `codegraph` and unrelated settings. The same backup, edit, overwrite and external-change checks apply.
+
+Serena runs its native Streamable HTTP server at `http://127.0.0.1:<project-port>/mcp` in `--context ide --project <absolute-path>` single-project mode. Each project has a stable independent port; an occupied port fails instead of switching. Clients connect directly, preserving Serena's tools and instructions. Startup checks for symbol tools and rejects servers that expose project switching. Native Serena endpoints do not use CodeGraph bearer tokens and are intended for trusted local clients. Single-project mode is not an OS sandbox.
+
+Stopping Serena leaves CodeGraph and other projects running. Application exit, installer-requested shutdown, project removal/relocation, and **Stop all** also stop owned Serena process trees. Existing project autostart applies to CodeGraph; Serena is started explicitly. Binaries are not bundled: an installed Serena executable is required. Windows native HTTP and symbol queries were tested with Serena 1.7.0; macOS/Linux Serena runtime acceptance remains separate from cross-platform compilation.
 
 ## Local development
 

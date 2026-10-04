@@ -484,6 +484,28 @@ pub async fn probe(record: &project_protocol::RuntimeRecord) -> anyhow::Result<V
     let _ = client.cancel().await;
     Ok(result??.into_iter().map(|t| t.name.to_string()).collect())
 }
+
+/// Probe a native local MCP server without adapting its tools or instructions.
+pub async fn connect_native_http(endpoint: &str) -> anyhow::Result<RunningService<RoleClient, ()>> {
+    let http = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(2))
+        .build()?;
+    let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
+        http,
+        rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(
+            endpoint.to_owned(),
+        ),
+    );
+    Ok(tokio::time::timeout(Duration::from_secs(5), ().serve(transport)).await??)
+}
+pub async fn probe_native_http(endpoint: &str) -> anyhow::Result<Vec<String>> {
+    let client = connect_native_http(endpoint).await?;
+    let result = tokio::time::timeout(Duration::from_secs(5), client.list_all_tools()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), client.cancel()).await;
+    Ok(result??.into_iter().map(|t| t.name.to_string()).collect())
+}
 impl Drop for Gateway {
     fn drop(&mut self) {
         self.unregister();

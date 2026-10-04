@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-基于 **Tauri 2 + React + TypeScript + Vite** 的 CodeGraph 项目管理桌面应用。
+基于 **Tauri 2 + React + TypeScript + Vite** 的 CodeGraph 与 Serena 项目管理桌面应用。
 
 每个项目独立启动 CodeGraph，使用独立索引、运行状态、日志和鉴权令牌。一个本地 HTTP 服务通过 `/mcp/{项目ID}` 路由到对应实例，Codex 与 Claude Code 仍通过项目级 MCP 配置连接。
 
@@ -41,6 +41,19 @@ Windows 安装器自动使用中文或英文，不弹出语言选择窗口。mac
 - 编辑后点击“重新读取 / 刷新预览”，语法校验通过才能应用；外部编辑器修改文件后也可刷新，窗口内草稿会保留。
 - 原配置无法解析时，可从错误提示进入“以覆盖模式预览”，再切换编辑修复；这一步不会写入文件。
 - 应用前备份原文件并检查外部修改。手动更改或删除 `codegraph` 的 URL/鉴权字段后，该条目可能不再连接当前项目，也不再登记为本项目受管条目。项目配置含本机鉴权信息，不应上传或分享这些令牌。
+
+## Serena（可选引擎）
+
+项目工作台增加 CodeGraph / Serena 引擎切换。Serena 提供符号搜索、引用分析和语义编辑，无需先建立 CodeGraph 索引；侧栏分别显示两个引擎的运行状态。
+
+1. 安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，执行 `uv tool install -p 3.13 serena-agent`，详见 [Serena 官方安装说明](https://oraios.github.io/serena/02-usage/010_installation.html)。
+2. 在“设置 → Serena 入口”中检测或手动选择可执行文件；检测通过后才保存入口。
+3. 选择项目和 Serena，点击“启动 Serena”。首次使用可能下载语言服务器依赖，失败时查看运行日志；各编程语言所需依赖由 Serena 管理。
+4. 在“MCP 配置”中预览并添加独立的 `serena` 条目。默认合并保留 `codegraph` 及其他配置，支持差异预览、备份、覆盖、手动编辑和外部修改检查。只修改项目的 `.codex/config.toml` / `.mcp.json`。
+
+Serena 通过 `--context ide --project <绝对路径>` 单项目模式启动原生 HTTP，每个项目使用固定独立端口 `http://127.0.0.1:<端口>/mcp`，客户端直接连接。启动检查要求存在符号工具且没有切换项目工具。端口冲突报错，不自动切换。原生 Serena 不使用 CodeGraph 的令牌，仅供本机可信客户端使用；单项目模式不是操作系统沙箱。
+
+停止 Serena 不影响 CodeGraph 或其他项目。退出应用、安装器请求退出、删除/迁移项目和“全部停止”都会回收受管 Serena 进程树。原有项目自动启动设置仍用于 CodeGraph，Serena 需主动启动。安装包不内置 Serena，需要自行安装其入口。已在 Windows 使用 Serena 1.7.0 验证原生 HTTP 和符号查询；macOS/Linux 的 Serena 运行验收与跨平台编译分别进行。
 
 ## 本地开发
 

@@ -7,6 +7,7 @@ mod lifecycle;
 mod models;
 mod persistence;
 mod runtime;
+mod serena;
 use models::*;
 use std::{
     collections::{HashMap, VecDeque},
@@ -24,6 +25,8 @@ pub struct AppState {
     snapshots: Mutex<HashMap<String, RuntimeSnapshot>>,
     gateways: tokio::sync::Mutex<HashMap<String, project_gateway::Gateway>>,
     http_host: tokio::sync::Mutex<Option<project_gateway::SharedGateway>>,
+    serena_instances: tokio::sync::Mutex<HashMap<String, serena::Instance>>,
+    serena_snapshots: Mutex<HashMap<String, serena::Snapshot>>,
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     previews: Mutex<HashMap<String, configuration::ConfigPreview>>,
     tasks: Arc<lifecycle::TaskRegistry>,
@@ -261,6 +264,13 @@ fn shutdown(app: tauri::AppHandle) {
         if let Some(host) = state.http_host.lock().await.take() {
             clean &= host.stop().await.is_ok();
         }
+        let mut serena_stops = tokio::task::JoinSet::new();
+        for (_, mut instance) in std::mem::take(&mut *state.serena_instances.lock().await) {
+            serena_stops.spawn(async move { instance.stop().await.is_ok() });
+        }
+        while let Some(result) = serena_stops.join_next().await {
+            clean &= result.unwrap_or(false);
+        }
         let _aborted_tasks = report.aborted;
         state.exit_ready.store(true, Ordering::SeqCst);
         app.exit(if clean { 0 } else { 1 });
@@ -321,6 +331,8 @@ pub fn run() {
                 data,
                 snapshots: Mutex::new(HashMap::new()),
                 gateways: Default::default(),
+                serena_instances: Default::default(),
+                serena_snapshots: Default::default(),
                 http_host: Default::default(),
                 locks: Default::default(),
                 previews: Default::default(),
@@ -378,12 +390,16 @@ pub fn run() {
                             let app = app.clone();
                             tauri::async_runtime::spawn(async move {
                                 let state = app.state::<AppState>();
-                                let ids: Vec<_> =
+                                let mut ids: Vec<_> =
                                     state.gateways.lock().await.keys().cloned().collect();
+                                ids.extend(state.serena_instances.lock().await.keys().cloned());
+                                ids.sort();
+                                ids.dedup();
                                 for id in ids {
                                     let lock = state.operation_lock(&id);
                                     let _guard = lock.lock().await;
                                     let _ = runtime::stop(&app, &state, &id).await;
+                                    let _ = serena::stop(&state, &id).await;
                                 }
                             });
                         }
@@ -452,6 +468,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            serena::detect_serena,
+            serena::get_serena_snapshot,
+            serena::list_serena_snapshots,
+            serena::serena_operation,
             commands::list_projects,
             commands::add_project,
             commands::update_project,

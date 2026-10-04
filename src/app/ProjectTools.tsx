@@ -40,6 +40,8 @@ import { Elapsed } from "@/components/Elapsed";
 import { call, message, subscribe } from "@/lib/ipc";
 import type {
   Client,
+  Engine,
+  SerenaSnapshot,
   ConfigPreview,
   ConfigResult,
   ConfigStatus,
@@ -71,17 +73,25 @@ function statusLabel(value: string) {
 }
 
 export function ProjectTools({
+  engine = "codegraph",
+  serena,
   project,
   snapshot,
   tab,
   refresh,
 }: {
+  engine?: Engine;
+  serena?: SerenaSnapshot;
   project: Project;
   snapshot?: RuntimeSnapshot;
   tab: string;
   refresh: () => Promise<void>;
 }) {
   const language = useLanguage();
+  const running =
+    engine === "serena"
+      ? serena?.state === "running"
+      : snapshot?.state === "running";
   useEffect(() => {
     setError("");
     setProbe(null);
@@ -147,6 +157,7 @@ export function ProjectTools({
   async function loadStatus() {
     setStatuses(
       await call<ConfigStatus[]>("get_client_config_status", {
+        engine,
         projectId: project.id,
       }),
     );
@@ -159,6 +170,7 @@ export function ProjectTools({
       Promise.all([
         call<LogEntry[]>("read_logs", { projectId: project.id, limit: 2000 }),
         call<ConfigStatus[]>("get_client_config_status", {
+          engine,
           projectId: project.id,
         }),
         call<TaskProgress[]>("get_project_tasks", { projectId: project.id }),
@@ -215,7 +227,9 @@ export function ProjectTools({
           );
           if (existing && existing.sequence > task.sequence) return old;
           return [
-            ...old.filter((task) => task.operationId !== task.operationId),
+            ...old.filter(
+              (existing) => existing.operationId !== task.operationId,
+            ),
             task,
           ].slice(-20);
         });
@@ -232,7 +246,7 @@ export function ProjectTools({
       active = false;
       cleanups.forEach((fn) => fn());
     };
-  }, [project.id, refresh, language]);
+  }, [project.id, refresh, language, engine]);
   useEffect(() => {
     if (follow && tab === "logs" && filtered.length)
       virtualizer.scrollToIndex(filtered.length - 1, { align: "end" });
@@ -261,10 +275,12 @@ export function ProjectTools({
       });
     if (source.kind === "previous")
       return call<ConfigPreview>("preview_previous_config", {
+        engine,
         projectId: project.id,
         previousRoot: source.root,
       });
     return call<ConfigPreview>("preview_client_config", {
+      engine,
       projectId: project.id,
       clients: source.clients,
       action: source.action,
@@ -445,7 +461,9 @@ export function ProjectTools({
       <TabsContent value="config" className="space-y-4">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-lg font-semibold">{t("MCP 配置")}</h2>
+            <h2 className="text-lg font-semibold">
+              {engine === "serena" ? "Serena" : "CodeGraph"} · {t("MCP 配置")}
+            </h2>
             <p className="text-sm text-muted-foreground mt-1">
               {t("客户端将共用")}
               {project.name}
@@ -455,14 +473,15 @@ export function ProjectTools({
           <div className="toolbar">
             <Button
               variant="outline"
-              disabled={busy || snapshot?.state !== "running"}
-              title={
-                snapshot?.state !== "running" ? t("需先启动实例") : undefined
-              }
+              disabled={busy || !running}
+              title={!running ? t("需先启动实例") : undefined}
               onClick={() =>
                 void execute(async () =>
                   setProbe(
-                    await call("test_project_mcp", { projectId: project.id }),
+                    await call("test_project_mcp", {
+                      projectId: project.id,
+                      engine,
+                    }),
                   ),
                 )
               }
@@ -535,35 +554,48 @@ export function ProjectTools({
           <CardHeader>
             <CardTitle className="text-sm">{t("连接路径")}</CardTitle>
             <CardDescription>
-              {t("客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph")}
+              {engine === "serena"
+                ? t("客户端 HTTP → 当前项目 Serena")
+                : t("客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph")}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {snapshot?.state === "running" && snapshot.port && (
-              <p className="mono text-xs mb-3 break-all">
-                {t("当前服务地址：http://127.0.0.1:")}
-                {snapshot.port}/mcp/{project.id}
-              </p>
+            {engine === "serena" && serena?.endpoint && (
+              <p className="mono text-xs mb-3 break-all">{serena.endpoint}</p>
             )}
+            {engine === "codegraph" &&
+              snapshot?.state === "running" &&
+              snapshot.port && (
+                <p className="mono text-xs mb-3 break-all">
+                  {t("当前服务地址：http://127.0.0.1:")}
+                  {snapshot.port}/mcp/{project.id}
+                </p>
+              )}
             <p className="text-xs text-muted-foreground leading-6">
               {t(
                 "请先在 CodeGraph Desktop 启动当前项目；实例停止或桌面应用退出后，HTTP 服务不可用。客户端可能要求信任项目或批准 MCP；写入后请重新加载客户端。独立测试通过不表示真实客户端已连接。",
               )}
             </p>
             <p className="text-xs text-muted-foreground leading-6 mt-2">
-              {t(
-                "所有项目共用一个固定本机端口，通过 /mcp/项目ID 路由分别连接；每个项目的令牌与会话独立隔离。重启后地址保持不变，端口冲突会报错，不会自动切换。配置含项目鉴权信息，请勿公开分享。",
-              )}
+              {engine === "serena"
+                ? t(
+                    "Serena 使用固定的独立本机端口，只监听 127.0.0.1。原生服务不使用 CodeGraph 的令牌；请仅供本机可信客户端使用。停止 Serena 或退出应用后连接不可用。",
+                  )
+                : t(
+                    "所有项目共用一个固定本机端口，通过 /mcp/项目ID 路由分别连接；每个项目的令牌与会话独立隔离。重启后地址保持不变，端口冲突会报错，不会自动切换。配置含项目鉴权信息，请勿公开分享。",
+                  )}
             </p>
-            <Alert className="mt-4">
-              <RefreshCw />
-              <AlertTitle>{t("迁移已有客户端配置")}</AlertTitle>
-              <AlertDescription>
-                {t(
-                  "之前生成的配置需要重新点击“预览并配置”，核对后应用，才能迁移为直接 HTTP 连接。",
-                )}
-              </AlertDescription>
-            </Alert>
+            {engine === "codegraph" && (
+              <Alert className="mt-4">
+                <RefreshCw />
+                <AlertTitle>{t("迁移已有客户端配置")}</AlertTitle>
+                <AlertDescription>
+                  {t(
+                    "之前生成的配置需要重新点击“预览并配置”，核对后应用，才能迁移为直接 HTTP 连接。",
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
             <div className="toolbar mt-4">
               <Button
                 variant="ghost"
@@ -579,9 +611,13 @@ export function ProjectTools({
                 onClick={() =>
                   void navigator.clipboard
                     .writeText(
-                      t(
-                        "在 CodeGraph Desktop 添加项目，初始化索引并启动实例；在 MCP 配置页预览并应用直接 HTTP 配置，然后在 Codex / Claude Code 信任项目并批准 MCP。已有配置需要重新预览应用以迁移。客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph。所有项目共用固定本机端口，由 /mcp/项目ID 区分项目，令牌与会话独立隔离。重启保持地址；端口冲突会报错，不会自动切换。实例停止或桌面应用退出后服务不可用。配置含本机项目鉴权信息，请勿公开分享。",
-                      ),
+                      engine === "serena"
+                        ? t(
+                            "先在设置中检测 Serena，再为当前项目启动 Serena。在 MCP 配置页预览并添加 serena 条目，重新连接客户端。",
+                          )
+                        : t(
+                            "在 CodeGraph Desktop 添加项目，初始化索引并启动实例；在 MCP 配置页预览并应用直接 HTTP 配置，然后在 Codex / Claude Code 信任项目并批准 MCP。已有配置需要重新预览应用以迁移。客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph。所有项目共用固定本机端口，由 /mcp/项目ID 区分项目，令牌与会话独立隔离。重启保持地址；端口冲突会报错，不会自动切换。实例停止或桌面应用退出后服务不可用。配置含本机项目鉴权信息，请勿公开分享。",
+                          ),
                     )
                     .then(() => toast.success(t("接入说明已复制")))
                 }

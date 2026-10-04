@@ -35,6 +35,7 @@ async function mock(page, delaySettings = false) {
       },
       unregisterCallback() {},
       async invoke(command, args = {}) {
+            if (command === "list_serena_snapshots") return {};
         if (command.startsWith("plugin:event|")) return ++sequence;
         if (command === "list_projects") return [project];
         if (command === "get_settings") {

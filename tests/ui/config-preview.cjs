@@ -18,6 +18,7 @@ const fs = require('node:fs');
       window.__TAURI_INTERNALS__ = {
         transformCallback() { return ++sequence; }, unregisterCallback() {},
         async invoke(command, args = {}) {
+            if (command === "list_serena_snapshots") return {};
           window.__uiTest.calls.push({ command, args });
           if (command.startsWith('plugin:event|')) return ++sequence;
           if (command === 'list_projects') return [project];

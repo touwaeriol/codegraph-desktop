@@ -121,6 +121,105 @@ pre,
   max-width: 1400px;
   margin: 0 auto;
 }
+.engine-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+.engine-picker > button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  text-align: left;
+  background: white;
+  min-width: 0;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.engine-picker > button[aria-pressed="true"] {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
+  background: #f7fcf9;
+}
+.engine-picker strong {
+  display: block;
+  font-size: 15px;
+}
+.engine-picker small {
+  display: block;
+  color: #5d6876;
+  font-size: 12px;
+  margin-top: 3px;
+}
+.engine-picker [data-slot="badge"] {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.engine-symbol {
+  display: inline-flex;
+  padding: 10px;
+  border-radius: 10px;
+  color: #176b52;
+  background: #eaf5ef;
+  flex-shrink: 0;
+}
+.engine-symbol.serena {
+  color: #5b4ab2;
+  background: #f0edfb;
+}
+.serena-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr 2fr;
+  gap: 20px;
+  padding: 18px 0;
+  border-block: 1px solid #edf0f4;
+}
+.endpoint-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #f5f7fa;
+  border: 1px solid #e5e9ef;
+  padding: 6px 12px;
+  border-radius: 8px;
+}
+.endpoint-line code {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.settings-engine {
+  background: #faf9fe;
+  border: 1px solid #e5def7;
+  padding: 20px;
+  border-radius: 12px;
+}
+.install-command {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  background: white;
+  border: 1px solid #e5e9ef;
+  border-radius: 6px;
+  font-size: 12px;
+}
+@media (max-width: 1080px) {
+  .engine-picker > button {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .engine-picker small {
+    font-size: 11px;
+  }
+  .serena-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .panel-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

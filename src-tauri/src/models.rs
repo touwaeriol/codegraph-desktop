@@ -70,6 +70,7 @@ pub struct Project {
 pub struct Settings {
     pub language: String,
     pub codegraph_entry: Option<String>,
+    pub serena_entry: Option<String>,
     pub index_concurrency: usize,
     pub close_behavior: String,
     pub app_data_dir: String,

@@ -314,3 +314,12 @@ Tauri capabilities 只向主窗口提供所需命令及文件选择能力，外�
 5. Windows 安装与升级后连接器路径是否稳定，Job Object 是否覆盖整个上游进程树。
 
 这些事项属于首个开发里程碑，不允许通过改成“每个客户端自己启动 CodeGraph”来悄悄改变已确定的产品行为。
+## Serena 可选引擎（v0.1.9）
+
+项目可并行运行 CodeGraph 与 Serena。此前的共享网关与项目令牌方案仍用于 CodeGraph；Serena 使用自己的原生 Streamable HTTP 服务，不经过 CodeGraph 工具适配器。
+
+Serena 的运行链路为“客户端 → 当前项目固定 loopback 端口 `/mcp` → Serena → 语言服务器”。启动参数使用绝对项目路径和 `ide` 单项目上下文；启动握手验证 `find_symbol` 存在且 `activate_project` 不存在。原生工具描述、服务提示及语义编辑调用由 Serena 直接处理。本机原生 HTTP 无 CodeGraph Bearer 鉴权，单项目上下文不构成文件系统沙箱。
+
+数据库版本 4 增加 `serena_http` 保存每个项目的独立端口。端口分配避开已登记的其他 Serena 端口与 CodeGraph 共享端口，重启后不变。MCP 配置仍使用项目目录中的原有文件，服务名分别为 `codegraph` / `serena`；管理指纹分别存为原有客户端键和 `serena:<客户端>`，防止移除配置时混淆归属。备份清单携带服务名，恢复时选择对应绑定。
+
+Serena 使用现有任务注册表、每项目操作锁与 Windows Job / Unix 进程组。退出、更新退出、迁移/删除项目和全部停止回收受管进程树。CodeGraph 的索引操作不会停止 Serena。Serena 不依赖 `.codegraph`，首次语言服务器初始化和后续索引由 Serena 自行管理，日志进入项目运行日志。

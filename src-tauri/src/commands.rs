@@ -79,6 +79,7 @@ pub async fn relocate_project(
     let mut p = state.project(&project_id)?;
     let canonical = persistence::canonical(&selected_path)?;
     crate::runtime::stop(&app, &state, &project_id).await?;
+    crate::serena::stop(&state, &project_id).await?;
     if p.canonical_path != canonical.to_string_lossy()
         && !p.previous_roots.contains(&p.canonical_path)
     {
@@ -101,6 +102,7 @@ pub async fn remove_project(
     let _guard = lock.lock().await;
     state.project(&project_id)?;
     crate::runtime::stop(&app, &state, &project_id).await?;
+    crate::serena::stop(&state, &project_id).await?;
     state
         .db
         .lock()
@@ -118,6 +120,7 @@ pub fn settings(state: &AppState) -> Result<Settings> {
     Ok(Settings {
         language: persistence::language(&db)?,
         codegraph_entry: persistence::setting(&db, "codegraphEntry")?,
+        serena_entry: persistence::setting(&db, "serenaEntry")?,
         index_concurrency: persistence::setting(&db, "indexConcurrency")?
             .and_then(|s| s.parse().ok())
             .unwrap_or(2),
@@ -378,6 +381,39 @@ pub fn read_logs(
 pub fn http_binding(state: &AppState, project_id: &str) -> Result<persistence::HttpBinding> {
     persistence::ensure_http_binding(&mut state.db.lock().unwrap(), project_id)
 }
+fn binding_for(state: &AppState, id: &str, engine: Option<&str>) -> Result<configuration::Target> {
+    match engine.unwrap_or("codegraph") {
+        engine
+            if engine == "codegraph"
+                || engine == format!("codegraph_project_{}", id.replace('-', "")) =>
+        {
+            let b = http_binding(state, id)?;
+            Ok(configuration::Target {
+                name: "codegraph".into(),
+                endpoint: b.endpoint(),
+                authorization: Some(b.authorization()),
+            })
+        }
+        "serena" => crate::serena::binding(state, id),
+        _ => Err(AppError::new(
+            "INVALID_ENGINE",
+            crate::i18n::tr("不支持的引擎", "Unknown engine"),
+        )),
+    }
+}
+fn managed_key(engine: &str, client: &str) -> String {
+    if engine == "codegraph" || engine.starts_with("codegraph_project_") {
+        client.into()
+    } else {
+        format!("{engine}:{client}")
+    }
+}
+fn managed_client(engine: &str, key: &str) -> Option<String> {
+    ["codex", "claude"]
+        .into_iter()
+        .find(|client| managed_key(engine, client) == key)
+        .map(str::to_string)
+}
 #[tauri::command]
 pub fn preview_client_config(
     state: State<AppState>,
@@ -385,8 +421,10 @@ pub fn preview_client_config(
     clients: Vec<String>,
     action: String,
     overrides: Option<Vec<configuration::ConfigOverride>>,
+    engine: Option<String>,
 ) -> Result<configuration::ConfigPreview> {
     let p = state.project(&project_id)?;
+    let target = binding_for(&state, &project_id, engine.as_deref())?;
     let managed = {
         let db = state.db.lock().unwrap();
         let mut stmt =
@@ -396,13 +434,15 @@ pub fn preview_client_config(
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })?
             .collect::<std::result::Result<HashMap<_, _>, _>>()?;
-        rows
+        rows.into_iter()
+            .filter_map(|(key, fp)| managed_client(&target.name, &key).map(|client| (client, fp)))
+            .collect()
     };
     let preview = configuration::preview_with_overrides(
         &p,
         &clients,
         &action,
-        &http_binding(&state, &project_id)?,
+        &target,
         &managed,
         overrides.as_deref().unwrap_or(&[]),
     )?;
@@ -450,12 +490,13 @@ pub async fn apply_client_config(
         let mut db = state.db.lock().unwrap();
         let tx = db.transaction()?;
         for f in &preview.files {
+            let key = managed_key(&preview.service_name, &f.client);
             if let Some(fp) = &f.fingerprint {
-                tx.execute("INSERT INTO managed_config(project_id,client,fingerprint) VALUES(?1,?2,?3) ON CONFLICT(project_id,client) DO UPDATE SET fingerprint=excluded.fingerprint",rusqlite::params![p.id,f.client,fp])?;
+                tx.execute("INSERT INTO managed_config(project_id,client,fingerprint) VALUES(?1,?2,?3) ON CONFLICT(project_id,client) DO UPDATE SET fingerprint=excluded.fingerprint",rusqlite::params![p.id,key,fp])?;
             } else {
                 tx.execute(
                     "DELETE FROM managed_config WHERE project_id=?1 AND client=?2",
-                    rusqlite::params![p.id, f.client],
+                    rusqlite::params![p.id, key],
                 )?;
             }
         }
@@ -470,15 +511,20 @@ pub async fn apply_client_config(
 pub async fn get_client_config_status(
     state: State<'_, AppState>,
     project_id: String,
+    engine: Option<String>,
 ) -> Result<Vec<configuration::ConfigStatus>> {
-    let binding = http_binding(&state, &project_id)?;
+    let binding = binding_for(&state, &project_id, engine.as_deref())?;
     let mut statuses = configuration::status(&state.project(&project_id)?, &binding);
-    if state
-        .gateways
-        .lock()
-        .await
-        .get(&project_id)
-        .is_some_and(|g| g.port() != binding.port || g.token() != binding.token)
+    if binding.name == "codegraph"
+        && state
+            .gateways
+            .lock()
+            .await
+            .get(&project_id)
+            .is_some_and(|g| {
+                g.endpoint() != binding.endpoint
+                    || Some(format!("Bearer {}", g.token())) != binding.authorization
+            })
     {
         for status in &mut statuses {
             if status.state == "configured" {
@@ -501,8 +547,36 @@ pub struct ProbeResult {
 pub async fn test_project_mcp(
     state: State<'_, AppState>,
     project_id: String,
+    engine: Option<String>,
 ) -> Result<ProbeResult> {
     state.project(&project_id)?;
+    if !["codegraph", "serena"].contains(&engine.as_deref().unwrap_or("codegraph")) {
+        return Err(AppError::new("INVALID_ENGINE", "Unknown engine"));
+    }
+    if engine.as_deref() == Some("serena") {
+        if !state
+            .serena_instances
+            .lock()
+            .await
+            .contains_key(&project_id)
+        {
+            return Err(AppError::new(
+                "SERVICE_NOT_RUNNING",
+                crate::i18n::tr("Serena 尚未运行", "Serena is not running"),
+            ));
+        }
+        let target = binding_for(&state, &project_id, Some("serena"))?;
+        let tools = project_gateway::probe_native_http(&target.endpoint)
+            .await
+            .map_err(|e| AppError::new("MCP_HANDSHAKE_FAILED", e))?;
+        return Ok(ProbeResult {
+            success: true,
+            tools,
+            message: crate::i18n::tr("Serena MCP 握手成功", "Serena MCP handshake succeeded")
+                .into(),
+            checked_at: now(),
+        });
+    }
     let record = project_protocol::read_runtime(&project_id)
         .map_err(|e| AppError::new("SERVICE_NOT_RUNNING", e))?;
     let tools = project_gateway::probe(&record)
@@ -552,7 +626,11 @@ pub fn preview_restore_backup(
                 &state.data,
                 &operation_id,
                 &p,
-                &http_binding(&state, &p.id)?,
+                &binding_for(
+                    &state,
+                    &p.id,
+                    Some(&configuration::backup_service(&state.data, &operation_id)?),
+                )?,
             )?;
             state
                 .previews
@@ -617,6 +695,7 @@ pub fn preview_previous_config(
     state: State<AppState>,
     project_id: String,
     previous_root: String,
+    engine: Option<String>,
 ) -> Result<configuration::ConfigPreview> {
     let mut p = state.project(&project_id)?;
     if !p.previous_roots.contains(&previous_root) || p.canonical_path == previous_root {
@@ -636,12 +715,17 @@ pub fn preview_previous_config(
             .collect::<std::result::Result<HashMap<_, _>, _>>()?;
         rows
     };
+    let target = binding_for(&state, &project_id, engine.as_deref())?;
+    let managed = managed
+        .into_iter()
+        .filter_map(|(key, fp)| managed_client(&target.name, &key).map(|client| (client, fp)))
+        .collect();
     p.canonical_path = previous_root.clone();
     let mut preview = configuration::preview(
         &p,
         &["codex".into(), "claude".into()],
         "remove",
-        &http_binding(&state, &project_id)?,
+        &target,
         &managed,
     )?;
     preview.validated_root = Some(previous_root);
