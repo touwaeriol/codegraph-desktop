@@ -77,7 +77,7 @@ impl AppState {
             .or_insert_with(|| RuntimeSnapshot::new(id))
             .clone()
     }
-    fn publish(&self, app: &tauri::AppHandle, mut s: RuntimeSnapshot) {
+    fn publish<R: tauri::Runtime>(&self, app: &tauri::AppHandle<R>, mut s: RuntimeSnapshot) {
         s.sequence = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
         s.timestamp = now();
         self.snapshots
@@ -86,7 +86,14 @@ impl AppState {
             .insert(s.project_id.clone(), s.clone());
         let _ = app.emit("project-state-changed", s);
     }
-    fn log(&self, app: &tauri::AppHandle, id: &str, level: &str, stage: &str, message: &str) {
+    fn log<R: tauri::Runtime>(
+        &self,
+        app: &tauri::AppHandle<R>,
+        id: &str,
+        level: &str,
+        stage: &str,
+        message: &str,
+    ) {
         let s = self.snapshot(id);
         let item = LogEntry {
             project_id: id.into(),

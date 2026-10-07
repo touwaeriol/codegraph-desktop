@@ -1,6 +1,6 @@
 [package]
 name = "codegraph-desktop"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2021"
 
 [lib]
@@ -31,3 +31,6 @@ rfd = { version = "0.16", default-features = false, features = ["gtk3"] }
 project-gateway = { path = "../crates/project-gateway" }
 project-protocol = { path = "../crates/project-protocol" }
 tauri-plugin-opener = "2"
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }

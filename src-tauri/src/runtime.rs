@@ -11,6 +11,9 @@ use std::{
 use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+#[cfg(test)]
+mod tests;
+
 pub async fn status(state: &AppState, p: &Project) -> Result<String> {
     state
         .snapshots
@@ -78,20 +81,30 @@ pub async fn status(state: &AppState, p: &Project) -> Result<String> {
     }
     Ok("ready".into())
 }
-pub async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()> {
+pub async fn start<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &AppState,
+    id: &str,
+) -> Result<()> {
     let binding = commands::http_binding(state, id)?;
-    if let Some(g) = state.gateways.lock().await.get(id) {
-        if g.port() != binding.port || g.token() != binding.token {
-            return Err(AppError::new(
-                "HTTP_RESTART_REQUIRED",
-                "HTTP 配置已更新，请重启项目实例使固定地址生效",
-            ));
+    let needs_cleanup = {
+        let gateways = state.gateways.lock().await;
+        match gateways.get(id) {
+            Some(g) if g.is_alive() => {
+                if g.port() != binding.port || g.token() != binding.token {
+                    return Err(AppError::new(
+                        "HTTP_RESTART_REQUIRED",
+                        "HTTP 配置已更新，请重启项目实例使固定地址生效",
+                    ));
+                }
+                return Ok(());
+            }
+            Some(_) => true,
+            None => false,
         }
-        return if g.is_alive() {
-            Ok(())
-        } else {
-            Err(AppError::new("UPSTREAM_EXITED", "项目会话已退出，请重启"))
-        };
+    };
+    if needs_cleanup {
+        stop(app, state, id).await?;
     }
     let p = state.project(id)?;
     let index = status(state, &p).await?;
@@ -175,7 +188,11 @@ pub async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result
     );
     Ok(())
 }
-pub async fn stop(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()> {
+pub async fn stop<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &AppState,
+    id: &str,
+) -> Result<()> {
     let gateway = state.gateways.lock().await.remove(id);
     if let Some(g) = gateway {
         let revoke = project_protocol::remove_runtime(id)
