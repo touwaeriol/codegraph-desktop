@@ -164,7 +164,7 @@ export function SerenaPanel({
             <Code2 size={17} />
             {t("语义代码工具")}
           </CardTitle>
-          <CardDescription>{t("符号搜索、引用分析与语义编辑")}</CardDescription>
+          <CardDescription>{t("符号定位、引用分析与诊断")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="metrics">
@@ -190,6 +190,9 @@ export function SerenaPanel({
               </div>
             </details>
           )}
+          <p className="text-xs text-muted-foreground leading-6">
+            {t("默认仅启用 LSP 查询与诊断。文件编辑、文本搜索及 memory 等辅助工具已禁用。")}
+          </p>
           <p className="text-xs text-muted-foreground leading-6">
             {t("首次启动可能需要准备语言服务器，可在运行日志中查看进度。")}
           </p>
@@ -234,7 +237,7 @@ export function SerenaSettings({ entry: initial }: { entry?: string | null }) {
   return (
     <EngineSettingsCard
       name="Serena"
-      description={t("符号搜索与语义编辑")}
+      description={t("LSP 查询与诊断")}
       testId="serena-settings"
     >
       <Field>

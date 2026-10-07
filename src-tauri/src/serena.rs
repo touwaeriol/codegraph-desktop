@@ -40,6 +40,7 @@ impl Default for Snapshot {
 pub struct Instance {
     child: tokio::process::Child,
     job: project_gateway::ProcessJob,
+    _context: tempfile::NamedTempFile,
 }
 impl Instance {
     pub async fn stop(&mut self) -> Result<()> {
@@ -287,10 +288,38 @@ pub async fn stop(state: &AppState, id: &str) -> Result<()> {
     publish(state, id, Snapshot::default());
     Ok(())
 }
-fn valid_tools(tools: &[String]) -> bool {
-    tools.iter().any(|t| t == "find_symbol") && !tools.iter().any(|t| t == "activate_project")
+const LSP_TOOLS: &[&str] = &[
+    "find_symbol",
+    "get_symbols_overview",
+    "find_referencing_symbols",
+    "find_implementations",
+    "find_declaration",
+    "get_diagnostics_for_file",
+];
+
+fn lsp_context() -> Result<tempfile::NamedTempFile> {
+    let mut file = tempfile::Builder::new()
+        .prefix("codegraph-serena-lsp-")
+        .suffix(".yml")
+        .tempfile()?;
+    serde_json::to_writer(
+        file.as_file_mut(),
+        &serde_json::json!({
+            "description": "Read-only LSP queries for a single project",
+            "prompt": "Use Serena only for symbol lookup, references, declarations, implementations and diagnostics. File editing, file reading, text search, shell commands, memory and onboarding are handled outside Serena.",
+            "single_project": true,
+            "fixed_tools": LSP_TOOLS,
+        }),
+    )
+    .map_err(|e| AppError::new("SERENA_CONFIG_FAILED", e))?;
+    Ok(file)
 }
-fn server_command(entry: &Path, root: &Path, port: &str) -> Command {
+
+fn valid_tools(tools: &[String]) -> bool {
+    tools.iter().any(|t| t == "find_symbol")
+        && tools.iter().all(|t| LSP_TOOLS.contains(&t.as_str()))
+}
+fn server_command(entry: &Path, root: &Path, port: &str, context: &Path) -> Command {
     let mut command = Command::new(entry);
     // GUI launches may not have the user's uv tools directory on PATH.
     let mut paths = entry
@@ -315,9 +344,9 @@ fn server_command(entry: &Path, root: &Path, port: &str) -> Command {
             "--port",
             port,
             "--context",
-            "ide",
-            "--project",
         ])
+        .arg(context)
+        .arg("--project")
         .arg(root)
         .args([
             "--enable-web-dashboard",
@@ -353,7 +382,8 @@ async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()>
     let reservation =
         std::net::TcpListener::bind(address).map_err(|e| AppError::new("SERENA_PORT_BUSY", e))?;
     let port = reservation.local_addr()?.port().to_string();
-    let mut command = server_command(&entry, &root, &port);
+    let context = lsp_context()?;
+    let mut command = server_command(&entry, &root, &port, context.path());
     drop(reservation);
     let (mut child, job) = project_gateway::spawn_owned(&mut command)
         .map_err(|e| AppError::new("SERENA_START_FAILED", e))?;
@@ -381,7 +411,11 @@ async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()>
             }
         });
     }
-    let mut instance = Instance { child, job };
+    let mut instance = Instance {
+        child,
+        job,
+        _context: context,
+    };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
     loop {
         if instance.child.try_wait()?.is_some() {
@@ -395,7 +429,7 @@ async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()>
         }
         if let Ok(tools) = project_gateway::probe_native_http(&target.endpoint).await {
             if !valid_tools(&tools) {
-                return Err(AppError::new("SERENA_INCOMPATIBLE", crate::i18n::tr("Serena 必须在 IDE 模式提供 find_symbol 并禁用 activate_project，请升级 Serena","Serena must expose find_symbol and disable activate_project in IDE context. Update Serena")));
+                return Err(AppError::new("SERENA_INCOMPATIBLE", crate::i18n::tr("Serena 必须仅提供 LSP 查询与诊断工具；请检查项目工具配置或升级 Serena","Serena must expose only LSP query and diagnostic tools. Check project tool configuration or update Serena")));
             }
             // A successful probe must never mask our process failing to bind.
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -550,7 +584,8 @@ mod tests {
             let reserve = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let port = reserve.local_addr().unwrap().port().to_string();
             let endpoint = format!("http://127.0.0.1:{port}/mcp");
-            let mut command = server_command(&entry, &project, &port);
+            let context = lsp_context().unwrap();
+            let mut command = server_command(&entry, &project, &port, context.path());
             command
                 .env("SERENA_HOME", root.join("serena-home"))
                 .stdout(Stdio::null())
@@ -559,7 +594,11 @@ mod tests {
                 ));
             drop(reserve);
             let (child, job) = project_gateway::spawn_owned(&mut command).unwrap();
-            instances.push(Instance { child, job });
+            instances.push(Instance {
+                child,
+                job,
+                _context: context,
+            });
             let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
             let tools = loop {
                 if let Ok(tools) = project_gateway::probe_native_http(&endpoint).await {
@@ -596,6 +635,26 @@ mod tests {
                 )
             );
             assert!(text.contains(marker), "Missing expected symbol: {text}");
+            for name in [
+                "replace_content",
+                "write_memory",
+                "read_memory",
+                "read_file",
+            ] {
+                let result = client
+                    .call_tool(
+                        serde_json::from_value(serde_json::json!({
+                            "name": name,
+                            "arguments": {},
+                        }))
+                        .unwrap(),
+                    )
+                    .await;
+                assert!(
+                    result.is_err() || result.unwrap().is_error == Some(true),
+                    "Disabled tool accepted a call: {name}"
+                );
+            }
             let _ = client.cancel().await;
             endpoints.push(endpoint);
         }
@@ -614,15 +673,57 @@ mod tests {
             .is_err());
     }
     #[test]
-    fn rejects_project_switching_and_unrelated_servers() {
-        assert!(valid_tools(&[
-            "find_symbol".into(),
-            "get_symbols_overview".into()
-        ]));
-        assert!(!valid_tools(&[
-            "find_symbol".into(),
-            "activate_project".into()
-        ]));
+    fn managed_context_exposes_only_lsp_tools() {
+        let context = lsp_context().unwrap();
+        let config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(context.path()).unwrap()).unwrap();
+        assert_eq!(config["single_project"], true);
+        assert_eq!(config["fixed_tools"], serde_json::json!(LSP_TOOLS));
+        let command = server_command(
+            Path::new("serena"),
+            Path::new("project"),
+            "12345",
+            context.path(),
+        );
+        let args: Vec<_> = command.as_std().get_args().collect();
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--context" && pair[1] == context.path().as_os_str()));
+    }
+    #[test]
+    fn rejects_non_lsp_tools_and_unrelated_servers() {
+        let tools: Vec<String> = LSP_TOOLS.iter().map(|tool| (*tool).into()).collect();
+        assert!(valid_tools(&tools));
+        for tool in [
+            "activate_project",
+            "replace_content",
+            "replace_in_files",
+            "replace_symbol_body",
+            "insert_after_symbol",
+            "insert_before_symbol",
+            "rename_symbol",
+            "safe_delete_symbol",
+            "create_text_file",
+            "read_file",
+            "search_for_pattern",
+            "find_file",
+            "list_dir",
+            "execute_shell_command",
+            "write_memory",
+            "read_memory",
+            "list_memories",
+            "delete_memory",
+            "rename_memory",
+            "edit_memory",
+            "onboarding",
+            "initial_instructions",
+            "unexpected_new_tool",
+        ] {
+            let mut extra = tools.clone();
+            extra.push(tool.into());
+            assert!(!valid_tools(&extra), "Non-LSP tool accepted: {tool}");
+        }
+        assert!(!valid_tools(&[]));
         assert!(!valid_tools(&["unrelated".into()]));
     }
 }

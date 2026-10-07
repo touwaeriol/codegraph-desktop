@@ -905,7 +905,7 @@ export default function App() {
                       </span>
                       <span>
                         <strong>Serena</strong>
-                        <small>{t("符号搜索与语义编辑")}</small>
+                        <small>{t("LSP 查询与诊断")}</small>
                       </span>
                       <Status snapshot={serena.snapshot} />
                     </button>

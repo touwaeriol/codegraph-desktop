@@ -318,7 +318,7 @@ Tauri capabilities 只向主窗口提供所需命令及文件选择能力，外�
 
 项目可并行运行 CodeGraph 与 Serena。此前的共享网关与项目令牌方案仍用于 CodeGraph；Serena 使用自己的原生 Streamable HTTP 服务，不经过 CodeGraph 工具适配器。
 
-Serena 的运行链路为“客户端 → 当前项目固定 loopback 端口 `/mcp` → Serena → 语言服务器”。启动参数使用绝对项目路径和 `ide` 单项目上下文；启动握手验证 `find_symbol` 存在且 `activate_project` 不存在。原生工具描述、服务提示及语义编辑调用由 Serena 直接处理。本机原生 HTTP 无 CodeGraph Bearer 鉴权，单项目上下文不构成文件系统沙箱。
+Serena 的运行链路为“客户端 → 当前项目固定 loopback 端口 `/mcp` → Serena → 语言服务器”。启动参数使用绝对项目路径和桌面生成的单项目 LSP 只读上下文。上下文用 `fixed_tools` 只允许 `find_symbol`、`get_symbols_overview`、`find_referencing_symbols`、`find_implementations`、`find_declaration` 和 `get_diagnostics_for_file`；文件读写、文本搜索、编辑、重命名、删除、shell、memory、onboarding 等工具默认不暴露。启动握手要求 `find_symbol` 存在，且所有实际暴露的工具均属于白名单；项目或用户配置重新启用其他工具时拒绝启动。配置保存在实例持有的临时文件中，不覆盖用户的 `.serena/project.yml`。原生工具描述和调用仍由 Serena 直接处理。本机原生 HTTP 无 CodeGraph Bearer 鉴权，工具白名单与单项目上下文不构成文件系统沙箱。
 
 数据库版本 4 增加 `serena_http` 保存每个项目的独立端口。端口分配避开已登记的其他 Serena 端口与 CodeGraph 共享端口，重启后不变。MCP 配置仍使用项目目录中的原有文件，服务名分别为 `codegraph` / `serena`；管理指纹分别存为原有客户端键和 `serena:<客户端>`，防止移除配置时混淆归属。备份清单携带服务名，恢复时选择对应绑定。
 

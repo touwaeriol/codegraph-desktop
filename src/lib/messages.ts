@@ -25,9 +25,11 @@ export const english = {
   "启动全部 CodeGraph": "Start all CodeGraph instances",
   项目引擎: "Project engines",
   代码图谱与关系检索: "Code graph & relationships",
-  符号搜索与语义编辑: "Symbols & semantic editing",
-  "符号搜索、引用分析与语义编辑":
-    "Symbol search, references and semantic editing",
+  "LSP 查询与诊断": "LSP queries & diagnostics",
+  "符号定位、引用分析与诊断":
+    "Symbol lookup, references and diagnostics",
+  "默认仅启用 LSP 查询与诊断。文件编辑、文本搜索及 memory 等辅助工具已禁用。":
+    "Only LSP queries and diagnostics are enabled by default. File editing, text search, memory and other auxiliary tools are disabled.",
   "启动 Serena": "Start Serena",
   "停止 Serena": "Stop Serena",
   可用工具: "Available tools",
