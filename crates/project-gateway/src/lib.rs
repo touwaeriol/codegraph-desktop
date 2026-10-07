@@ -622,10 +622,10 @@ mod persistent_http_tests {
     }
     #[tokio::test]
     async fn shared_http_stop_drains_keep_alive_connections_before_rebinding() {
-        let http = reqwest::Client::builder().no_proxy().build().unwrap();
         let mut host = SharedGateway::start(0).await.unwrap();
         let port = host.port();
         for _ in 0..4 {
+            let http = reqwest::Client::builder().no_proxy().build().unwrap();
             let response = http
                 .get(format!("http://127.0.0.1:{port}/unknown"))
                 .send()
