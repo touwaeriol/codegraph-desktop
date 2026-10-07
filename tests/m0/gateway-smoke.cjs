@@ -41,8 +41,25 @@ function portClosed(port) { return new Promise(resolve => { let socket = net.con
     const a = await host(evidence.projects[0].dir), b = await host(evidence.projects[1].dir);
     const a1 = client(a.id), a2 = client(a.id), b1 = client(b.id);
     await Promise.all([a1.init(), a2.init(), b1.init()]);
-    const call = (c, id, args = { query: 'uniqueMarker', maxFiles: 1 }) => c.send('tools/call', { name: 'codegraph_explore', arguments: args }, id);
-    const results = await Promise.all([call(a1, 7), call(a2, 7, { query: 'secondaryMarker', maxFiles: 1 }), call(b1, 7)]);
+    const call = (c, id, args = { query: 'uniqueMarker', maxFiles: 1, includeSource: true }) => c.send('tools/call', { name: 'codegraph_explore', arguments: args }, id);
+    const tools = await a1.send('tools/list', {}, 1);
+    assert.deepStrictEqual(tools.result.tools.map(tool => tool.name).sort(), ['codegraph_callers', 'codegraph_explore', 'codegraph_impact', 'codegraph_search']);
+    const lightweight = await call(a1, 2, { query: 'uniqueMarker', maxFiles: 1, projectPath: evidence.projects[0].dir });
+    assert(!lightweight.error && lightweight.result.isError !== true, JSON.stringify(lightweight));
+    const lightweightText = JSON.stringify(lightweight.result);
+    assert(lightweightText.includes('uniqueMarker') && lightweightText.includes('sample.ts'), 'default explore lost symbol name/location');
+    assert(!lightweightText.includes('A_ONLY_739'), 'default explore leaked function-body marker');
+    for (const [name, arguments_] of [
+        ['codegraph_explore', { query: 'uniqueMarker', maxFiles: 1 }],
+        ['codegraph_search', { query: 'uniqueMarker', limit: 1 }],
+        ['codegraph_callers', { symbol: 'uniqueMarker' }],
+        ['codegraph_impact', { symbol: 'uniqueMarker' }],
+    ]) {
+        const response = await a1.send('tools/call', { name, arguments: { ...arguments_, maxChars: 512 } }, 3);
+        assert(!response.error && response.result.isError !== true, name + ' failed on small project: ' + JSON.stringify(response));
+        assert([...JSON.stringify(response.result)].length <= 512, name + ' exceeded serialized maxChars');
+    }
+    const results = await Promise.all([call(a1, 7), call(a2, 7, { query: 'secondaryMarker', maxFiles: 1, includeSource: true }), call(b1, 7)]);
     assert(JSON.stringify(results[0]).includes('A_ONLY_739'));
     assert(JSON.stringify(results[1]).includes('A_SECOND_842'));
     assert(!JSON.stringify(results[0]).includes('A_SECOND_842'));
@@ -71,25 +88,37 @@ function portClosed(port) { return new Promise(resolve => { let socket = net.con
     finally {
         fs.unlinkSync(junction);
     }
-    const absoluteQuery = await call(a1, 81, { query: path.join(evidence.projects[1].dir, 'sample.ts'), maxFiles: 1 });
+    const absoluteQuery = await call(a1, 81, { query: path.join(evidence.projects[1].dir, 'sample.ts'), maxFiles: 1, includeSource: true });
     assert(!JSON.stringify(absoluteQuery).includes('B_ONLY_739'), 'natural query leaked B');
     const watchedName = 'watcherAdded' + Date.now();
     const watchedMarker = 'WATCHER_NEW_' + crypto.randomUUID();
     const watchedFile = path.join(evidence.projects[0].dir, watchedName + '.ts');
-    const before = await call(a1, 90, { query: watchedName, maxFiles: 1 });
+    const before = await call(a1, 90, { query: watchedName, maxFiles: 1, includeSource: true });
     assert(!JSON.stringify(before).includes(watchedMarker));
-    fs.writeFileSync(watchedFile, `export function ${watchedName}(){return '${watchedMarker}';}\n`);
+    fs.writeFileSync(watchedFile, `export function ${watchedName}(){return '${watchedMarker}_${'padding'.repeat(200)}';}\n`);
     addedFiles.push(watchedFile);
     let watcherUpdated = false;
     for (let attempt = 0; attempt < 30; attempt++) {
         await delay(1000);
-        const updated = await call(a1, 91 + attempt, { query: watchedName, maxFiles: 1 });
+        const updated = await call(a1, 91 + attempt, { query: watchedName, maxFiles: 1, includeSource: true });
         if (JSON.stringify(updated).includes(watchedMarker)) {
             watcherUpdated = true;
             break;
         }
     }
     assert(watcherUpdated, 'watcher did not index newly added symbol');
+    const watchedDefault = await call(a1, 121, { query: watchedName, maxFiles: 1 });
+    assert(!watchedDefault.error && watchedDefault.result.isError !== true, JSON.stringify(watchedDefault));
+    const watchedDefaultText = JSON.stringify(watchedDefault.result);
+    assert(watchedDefaultText.includes(watchedName) && watchedDefaultText.includes(watchedName + '.ts'), 'default query lost newly indexed symbol/location');
+    assert(!watchedDefaultText.includes(watchedMarker), 'default query leaked random function-body marker');
+    const truncated = await call(a1, 122, { query: watchedName, maxFiles: 1, includeSource: true, maxChars: 512 });
+    assert(!truncated.error && truncated.result.isError !== true, JSON.stringify(truncated));
+    assert([...JSON.stringify(truncated.result)].length <= 512, 'source response exceeded serialized maxChars');
+    assert.equal(truncated.result.content.length, 1);
+    assert.equal(truncated.result.content[0].type, 'text');
+    assert(truncated.result.content[0].text.includes('[TRUNCATED:'), 'oversized source did not report truncation');
+    assert(truncated.result.content[0].text.includes('only shown excerpts are available; narrow query or use LSP, not a complete file read'), 'truncation warning missing source completeness guidance');
     a1.p.stdin.end();
     a2.p.stdin.end();
     await stopped(a.p);
@@ -136,7 +165,7 @@ function portClosed(port) { return new Promise(resolve => { let socket = net.con
     b1.p.stdin.end();
     await stopped(b.p);
     assert(await portClosed(b.port));
-    const report = { watcherNewSymbolIndexed: true, hostCrashProcessesReleased: true, hostCrashPortReleased: true, crashOwnedPids: [...descendants], sameIdRouting: true, dualConnectorOneUpstream: true, crossProjectRejected: true, stopAAllowsB: true, portsReleased: true, wrongTokenHostOriginRejected: true, oldGenerationSessionRejected: true, upstreamPids: [a.pid, b.pid] };
+    const report = { defaultExploreSourceFree: true, lightweightToolsCallable: true, serializedMaxCharsRespected: true, sourceTruncationReported: true, watcherNewSymbolIndexed: true, hostCrashProcessesReleased: true, hostCrashPortReleased: true, crashOwnedPids: [...descendants], sameIdRouting: true, dualConnectorOneUpstream: true, crossProjectRejected: true, stopAAllowsB: true, portsReleased: true, wrongTokenHostOriginRejected: true, oldGenerationSessionRejected: true, upstreamPids: [a.pid, b.pid] };
     fs.writeFileSync(path.join(__dirname, 'gateway-evidence.json'), JSON.stringify(report, null, 2));
     console.log(report);
 }

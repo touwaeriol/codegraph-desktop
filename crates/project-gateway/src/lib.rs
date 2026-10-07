@@ -1,5 +1,7 @@
+mod budget;
 mod entry;
 mod job;
+mod policy;
 pub mod relay;
 use anyhow::Context;
 use axum::{
@@ -210,6 +212,7 @@ impl Gateway {
             rand::thread_rng().fill_bytes(&mut bytes);
             bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
         });
+        policy::check_index(&root).map_err(|e| anyhow::anyhow!(e.to_string()))?;
         let mut command = Command::new(&options.entry.program);
         command
             .args(&options.entry.prefix_args)
@@ -217,6 +220,9 @@ impl Gateway {
             .arg(&root)
             .current_dir(&root)
             .env("CODEGRAPH_NO_DAEMON", "1")
+            .env("CODEGRAPH_DIR", ".codegraph")
+            .env("CODEGRAPH_MCP_TOOLS", policy::UPSTREAM_TOOLS)
+            .env("CODEGRAPH_EXPLORE_DEDUP", "0")
             .env("CODEGRAPH_HOST_PPID", std::process::id().to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -246,23 +252,40 @@ impl Gateway {
         let upstream = tokio::time::timeout(Duration::from_secs(30), ().serve((output, input)))
             .await
             .context("MCP 握手超时")??;
-        let tools =
+        let upstream_tools =
             tokio::time::timeout(Duration::from_secs(30), upstream.list_all_tools()).await??;
-        // 1.6.2 exposes explore; reject schema expansion until independently audited.
-        let tools: Vec<_> = tools
-            .into_iter()
-            .filter(|t| {
-                t.name == "codegraph_explore"
-                    && t.input_schema
-                        .get("properties")
-                        .and_then(|v| v.as_object())
-                        .is_some_and(|p| {
-                            p.keys()
-                                .all(|k| matches!(k.as_str(), "query" | "maxFiles" | "projectPath"))
-                        })
-            })
-            .collect();
-        anyhow::ensure!(!tools.is_empty(), "没有通过隔离验证的工具");
+        for name in ["codegraph_search", "codegraph_explore"] {
+            anyhow::ensure!(
+                upstream_tools
+                    .iter()
+                    .any(|tool| tool.name == name && policy::compatible(tool)),
+                "LIGHTWEIGHT_TOOLS_REQUIRED: missing or incompatible {name}"
+            );
+        }
+        for name in ["codegraph_callers", "codegraph_impact"] {
+            if let Some(tool) = upstream_tools.iter().find(|tool| tool.name == name) {
+                anyhow::ensure!(policy::compatible(tool), "INCOMPATIBLE_TOOL_SCHEMA: {name}");
+            } else {
+                // CodeGraph 1.6.2 hides these handlers from small-project tool lists.
+                let probe = rmcp::model::CallToolRequestParam {
+                    name: name.into(),
+                    arguments: serde_json::json!({
+                        "symbol": format!("__desktop_probe_{}", uuid::Uuid::new_v4()),
+                        "projectPath": &root,
+                    })
+                    .as_object()
+                    .cloned(),
+                };
+                let result =
+                    tokio::time::timeout(Duration::from_secs(30), upstream.call_tool(probe))
+                        .await??;
+                anyhow::ensure!(
+                    result.is_error != Some(true),
+                    "LIGHTWEIGHT_TOOL_UNAVAILABLE: {name}"
+                );
+            }
+        }
+        let tools = policy::tools();
         let shared = Arc::new(relay::Shared {
             peer: upstream.peer().clone(),
             tools,

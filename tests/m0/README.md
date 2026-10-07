@@ -2,7 +2,11 @@
 
 当前已实测上游 CodeGraph 1.6.2：两个带中文、空格及 `&` 的临时项目初始化成功；stdio MCP 握手、工具列表、真实 `uniqueMarker` 查询分别返回 A_ONLY_739 和 B_ONLY_739；关闭 stdin 后两个服务均退出，退出码为 0。完整结果见 upstream-evidence.json。该文件记录一次本机运行证据，临时路径不保证一直存在。
 
-本机上游源码确认 `CODEGRAPH_NO_DAEMON=1` 进入 direct 模式。网关强制设置此环境变量，不附着全局 daemon；使用 Job Object 管理受管进程树。只开放本轮实际发现的 `codegraph_explore`，限制工具参数并固定 projectPath。未知工具不开放。
+本机上游源码确认 `CODEGRAPH_NO_DAEMON=1` 进入 direct 模式。网关强制设置此环境变量，不附着全局 daemon；使用 Job Object 管理受管进程树。Desktop 显式启用并校验 `codegraph_explore`、`codegraph_search`、`codegraph_callers`、`codegraph_impact`，未知工具仍不开放。上游 1.6.2 在小项目中隐藏关系工具的列表项，网关在握手期间验证对应只读处理器后再暴露自有 schema。
+
+Desktop 的 `codegraph_explore` 默认映射为轻量 search，只返回符号、签名与位置；必须显式传 `includeSource:true` 才转发上游源码探索。`maxFiles` 仅控制显式源码模式。所有工具接受 Desktop 自有 `maxChars`（默认 6000，范围 512–24000），按整个序列化 MCP 工具结果的 Unicode 字符数限制输出，包含结构化内容、元数据和截断提示，不是 token 计数。截断时明确提示结果不完整，不可视为完整文件读取。
+
+参数逐工具校验，固定注入绑定的规范化项目根；每次调用验证项目自己的 `.codegraph/codegraph.db` 及 `nodes` 表，拒绝缺失/损坏索引向父项目回退。显式文件参数必须位于项目内，拒绝绝对路径、父目录穿越及 symlink/junction 越界。共享上游强制 `CODEGRAPH_EXPLORE_DEDUP=0`，不同客户端或压缩后的上下文不会因为先前调用而被省略内容。
 
 ## 可重复验证
 

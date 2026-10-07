@@ -52,7 +52,7 @@ impl ServerHandler for Relay {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
-            instructions: Some("项目专属 CodeGraph 网关".into()),
+            instructions: Some("项目专属只读 CodeGraph 网关。默认仅返回符号与关系，不返回源码正文。需要源码时优先用 LSP 精确读取；仅 includeSource=true 才启用源码探索。响应有硬预算，截断结果不是完整文件或完整关系集。".into()),
             ..Default::default()
         }
     }
@@ -68,7 +68,7 @@ impl ServerHandler for Relay {
     }
     async fn call_tool(
         &self,
-        mut request: CallToolRequestParam,
+        request: CallToolRequestParam,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         if self.shared.poisoned.load(Ordering::SeqCst) {
@@ -77,24 +77,7 @@ impl ServerHandler for Relay {
         if !self.shared.tools.iter().any(|t| t.name == request.name) {
             return Err(ErrorData::invalid_params("工具未通过项目隔离验证", None));
         }
-        if let Some(root) = &self.shared.root {
-            let args = request.arguments.get_or_insert_with(Default::default);
-            if args
-                .keys()
-                .any(|k| !matches!(k.as_str(), "query" | "maxFiles" | "projectPath"))
-            {
-                return Err(ErrorData::invalid_params("未知参数", None));
-            }
-            if let Some(path) = args.get("projectPath") {
-                let path = path
-                    .as_str()
-                    .ok_or_else(|| ErrorData::invalid_params("projectPath 必须是路径", None))?;
-                if dunce::canonicalize(path).ok().as_ref() != Some(root) {
-                    return Err(ErrorData::invalid_params("PROJECT_SCOPE_VIOLATION", None));
-                }
-            }
-            args.insert("projectPath".into(), serde_json::json!(root));
-        }
+        let (request, max_chars) = crate::policy::prepare(request, self.shared.root.as_deref())?;
         let _slot = self
             .shared
             .slots
@@ -104,7 +87,7 @@ impl ServerHandler for Relay {
         if self.shared.poisoned.load(Ordering::SeqCst) {
             return Err(error("上游执行结果不确定，请重启项目"));
         }
-        let handle = self
+        let handle = match self
             .shared
             .peer
             .send_cancellable_request(
@@ -116,7 +99,15 @@ impl ServerHandler for Relay {
                 PeerRequestOptions::default(),
             )
             .await
-            .map_err(|e| error(e.to_string()))?;
+        {
+            Ok(handle) => handle,
+            Err(e) => {
+                return Ok(crate::budget::bound(
+                    CallToolResult::error(vec![Content::text(e.to_string())]),
+                    max_chars,
+                ))
+            }
+        };
         // rmcp 0.8.5 locally resolves a request as Cancelled when a cancel
         // notification is sent; this does not acknowledge upstream completion.
         // Keep the serialization guard until a read-only query actually returns.
@@ -131,7 +122,15 @@ impl ServerHandler for Relay {
             _=tokio::time::sleep_until(deadline)=>None,
         };
         let response = if let Some(result) = result {
-            result.map_err(|e| error(e.to_string()))?
+            match result {
+                Ok(response) => response,
+                Err(e) => {
+                    return Ok(crate::budget::bound(
+                        CallToolResult::error(vec![Content::text(e.to_string())]),
+                        max_chars,
+                    ))
+                }
+            }
         } else {
             match tokio::time::timeout_at(deadline, &mut response).await {
                 Ok(_) => return Err(error("请求已取消；上游只读查询已结束，结果已丢弃")),
@@ -150,7 +149,7 @@ impl ServerHandler for Relay {
             }
         };
         match response {
-            ServerResult::CallToolResult(result) => Ok(result),
+            ServerResult::CallToolResult(result) => Ok(crate::budget::bound(result, max_chars)),
             _ => Err(error("上游响应类型错误")),
         }
     }
@@ -159,6 +158,114 @@ impl ServerHandler for Relay {
 mod tests {
     use super::*;
     use rmcp::ServiceExt;
+
+    #[derive(Clone)]
+    struct PolicyTool {
+        calls: Arc<std::sync::Mutex<Vec<CallToolRequestParam>>>,
+    }
+    impl ServerHandler for PolicyTool {
+        fn get_info(&self) -> ServerInfo {
+            ServerInfo {
+                capabilities: ServerCapabilities::builder().enable_tools().build(),
+                ..Default::default()
+            }
+        }
+        async fn call_tool(
+            &self,
+            request: CallToolRequestParam,
+            _: RequestContext<RoleServer>,
+        ) -> Result<CallToolResult, ErrorData> {
+            self.calls.lock().unwrap().push(request.clone());
+            if request
+                .arguments
+                .as_ref()
+                .and_then(|args| args.get("query"))
+                .and_then(serde_json::Value::as_str)
+                == Some("huge-error")
+            {
+                return Err(ErrorData::internal_error("error".repeat(3000), None));
+            }
+            let text = if request.name == "codegraph_explore" {
+                format!("src/lib.rs:7\n{}", "SECRET_SOURCE_BODY".repeat(1000))
+            } else {
+                "target (function) - src/lib.rs:7".into()
+            };
+            Ok(CallToolResult::success(vec![Content::text(text)]))
+        }
+    }
+    #[tokio::test]
+    async fn defaults_and_budgets_apply_over_mcp_without_cross_client_dedup() {
+        let calls = Arc::new(std::sync::Mutex::new(vec![]));
+        let (server_io, client_io) = tokio::io::duplex(65536);
+        let (server, upstream) = tokio::join!(
+            PolicyTool {
+                calls: calls.clone()
+            }
+            .serve(server_io),
+            ().serve(client_io)
+        );
+        let server = server.unwrap();
+        let upstream = upstream.unwrap();
+        let shared = Arc::new(Shared {
+            peer: upstream.peer().clone(),
+            tools: crate::policy::tools(),
+            root: None,
+            gate: Mutex::new(()),
+            slots: Semaphore::new(33),
+            sessions: Default::default(),
+            poisoned: Default::default(),
+        });
+        let (s1, c1) = tokio::io::duplex(65536);
+        let (s2, c2) = tokio::io::duplex(65536);
+        let (s1, c1, s2, c2) = tokio::join!(
+            Relay::new(shared.clone()).serve(s1),
+            ().serve(c1),
+            Relay::new(shared).serve(s2),
+            ().serve(c2)
+        );
+        let (s1, c1, s2, c2) = (s1.unwrap(), c1.unwrap(), s2.unwrap(), c2.unwrap());
+        for client in [&c1, &c2] {
+            let result = client.call_tool(serde_json::from_value(serde_json::json!({"name":"codegraph_explore","arguments":{"query":"target"}})).unwrap()).await.unwrap();
+            let text = serde_json::to_string(&result).unwrap();
+            assert!(text.contains("src/lib.rs:7"));
+            assert!(!text.contains("SECRET_SOURCE_BODY"));
+            let result = client.call_tool(serde_json::from_value(serde_json::json!({"name":"codegraph_explore","arguments":{"query":"target","includeSource":true,"maxChars":512}})).unwrap()).await.unwrap();
+            let text = serde_json::to_string(&result).unwrap();
+            assert!(text.chars().count() <= 512);
+            assert!(text.contains("SECRET_SOURCE_BODY"));
+            assert!(text.contains("TRUNCATED"));
+        }
+        let result = c1.call_tool(serde_json::from_value(serde_json::json!({"name":"codegraph_search","arguments":{"query":"huge-error","maxChars":512}})).unwrap()).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+        assert!(serde_json::to_string(&result).unwrap().chars().count() <= 512);
+        {
+            let calls = calls.lock().unwrap();
+            assert_eq!(
+                calls
+                    .iter()
+                    .map(|call| call.name.as_ref())
+                    .collect::<Vec<_>>(),
+                [
+                    "codegraph_search",
+                    "codegraph_explore",
+                    "codegraph_search",
+                    "codegraph_explore",
+                    "codegraph_search"
+                ]
+            );
+            assert!(calls.iter().all(|call| {
+                let args = call.arguments.as_ref().unwrap();
+                !args.contains_key("maxChars") && !args.contains_key("includeSource")
+            }));
+        }
+        let _ = c1.cancel().await;
+        let _ = c2.cancel().await;
+        let _ = s1.cancel().await;
+        let _ = s2.cancel().await;
+        let _ = upstream.cancel().await;
+        let _ = server.cancel().await;
+    }
+
     #[derive(Clone)]
     struct SlowTool {
         active: Arc<AtomicUsize>,

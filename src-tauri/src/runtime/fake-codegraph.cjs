@@ -28,10 +28,16 @@ input.on("line", (line) => {
       };
       break;
     case "tools/list":
-      result = { tools: [{
-        name: "codegraph_explore",
-        inputSchema: { type: "object", properties: { query: { type: "string" } } },
-      }] };
+      result = { tools: ["codegraph_explore", "codegraph_search", "codegraph_callers", "codegraph_impact"].map((name) => ({
+        name,
+        inputSchema: {
+          type: "object",
+          properties: {
+            [name === "codegraph_explore" || name === "codegraph_search" ? "query" : "symbol"]: { type: "string" },
+            projectPath: { type: "string" },
+          },
+        },
+      })) };
       break;
     case "tools/call":
       if (request.params.arguments.query === "exit") process.exit(1);

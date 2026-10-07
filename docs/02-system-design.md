@@ -54,6 +54,14 @@ flowchart LR
 
 这里是产品级路由隔离，不宣称对恶意本机用户构成操作系统沙箱。外部 CodeGraph 仍以当前用户权限运行。
 
+### CodeGraph 默认无源码工具契约
+
+Desktop 提供经过参数校验的 `codegraph_explore`、`codegraph_search`、`codegraph_callers` 和 `codegraph_impact`。`explore` 默认转为轻量符号定位，只有显式 `includeSource:true` 才执行上游源码探索；`maxFiles` 仅在该源码模式中生效。调用者仍可传绑定项目的 `projectPath` 作为身份校验，但不能切换项目。
+
+所有工具使用 Desktop 自有 `maxChars` 参数，默认 6000，允许 512–24000。预算针对整个序列化 MCP 工具结果的 Unicode 字符数，包括文本、结构化内容、元数据和截断提示；并非 token 预算。超限响应保留文本前缀和明确的 `TRUNCATED` 提示，不把截断结果称为完整源码或完整关系集。上游错误也经过同一预算处理。
+
+Desktop 使用自己的工具说明，不透传上游“任何任务先调用 explore”或 `alwaysLoad` 引导。上游进程只允许上述四个处理器，关闭跨调用源码去重；小项目中未列出的关系处理器须通过启动探测才能暴露。调用前以只读方式确认绑定项目的 `.codegraph/codegraph.db` 具有上游用于判定索引的 `nodes` 表，拒绝缺失、无效或外部索引导致的父项目回退；路径、数据库、symlink/junction 校验不代替操作系统沙箱。
+
 ## 3. 项目生命周期
 
 ### 3.1 服务状态

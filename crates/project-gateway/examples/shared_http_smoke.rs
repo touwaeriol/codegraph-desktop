@@ -8,12 +8,34 @@ async fn marker(
     own: &str,
     other: &str,
 ) -> Result<()> {
-    let response = client
+    let default = client
         .call_tool(CallToolRequestParam {
             name: "codegraph_explore".into(),
             arguments: serde_json::json!({"query":"uniqueMarker", "maxFiles":1})
                 .as_object()
                 .cloned(),
+        })
+        .await?;
+    ensure!(
+        default.is_error != Some(true),
+        "default marker query failed"
+    );
+    let default_text = serde_json::to_string(&default)?;
+    ensure!(
+        default_text.contains("uniqueMarker") && default_text.contains("sample.ts"),
+        "default query lost symbol name/location"
+    );
+    ensure!(
+        !default_text.contains(own) && !default_text.contains(other),
+        "default query leaked function-body marker"
+    );
+    let response = client
+        .call_tool(CallToolRequestParam {
+            name: "codegraph_explore".into(),
+            arguments:
+                serde_json::json!({"query":"uniqueMarker", "maxFiles":1, "includeSource":true})
+                    .as_object()
+                    .cloned(),
         })
         .await?;
     ensure!(response.is_error != Some(true), "marker query failed");
@@ -84,7 +106,23 @@ async fn main() -> Result<()> {
     let b_record = record(&b, &b_id);
     let ca = connect(&a_record).await?;
     let cb = connect(&b_record).await?;
-    ensure!(!ca.list_all_tools().await?.is_empty(), "A tools missing");
+    let mut names: Vec<_> = ca
+        .list_all_tools()
+        .await?
+        .into_iter()
+        .map(|tool| tool.name.into_owned())
+        .collect();
+    names.sort();
+    ensure!(
+        names
+            == [
+                "codegraph_callers",
+                "codegraph_explore",
+                "codegraph_impact",
+                "codegraph_search"
+            ],
+        "unexpected Desktop tools: {names:?}"
+    );
     let http = reqwest::Client::builder().no_proxy().build()?;
     marker(&ca, "A_ONLY_739", "B_ONLY_739").await?;
     marker(&cb, "B_ONLY_739", "A_ONLY_739").await?;
@@ -154,6 +192,6 @@ async fn main() -> Result<()> {
     host.stop().await?;
     ensure!(!b.is_alive(), "host shutdown did not cancel project");
     b.stop().await?;
-    println!("PASS shared port, independent auth, unique source markers, project path isolation, foreign/stale session rejection, stop/restart isolation");
+    println!("PASS shared port, independent auth, four Desktop tools, default source-free queries, explicit unique source markers, project path isolation, foreign/stale session rejection, stop/restart isolation");
     Ok(())
 }

@@ -23,12 +23,85 @@ async fn query(c: &RunningService<RoleClient, ()>, name: &str) -> Result<String>
     let result = c
         .call_tool(CallToolRequestParam {
             name: "codegraph_explore".into(),
-            arguments: serde_json::json!({"query":name,"maxFiles":1})
+            arguments: serde_json::json!({"query":name,"maxFiles":1,"includeSource":true})
                 .as_object()
                 .cloned(),
         })
         .await?;
+    ensure!(result.is_error != Some(true), "source query failed");
     Ok(serde_json::to_string(&result)?)
+}
+async fn lightweight_contract(c: &RunningService<RoleClient, ()>, root: &str) -> Result<()> {
+    let mut names: Vec<_> = c
+        .list_all_tools()
+        .await?
+        .into_iter()
+        .map(|tool| tool.name.into_owned())
+        .collect();
+    names.sort();
+    ensure!(
+        names
+            == [
+                "codegraph_callers",
+                "codegraph_explore",
+                "codegraph_impact",
+                "codegraph_search"
+            ],
+        "unexpected Desktop tools: {names:?}"
+    );
+    let default = c
+        .call_tool(CallToolRequestParam {
+            name: "codegraph_explore".into(),
+            arguments:
+                serde_json::json!({"query":"uniqueMarker", "maxFiles":1, "projectPath":root})
+                    .as_object()
+                    .cloned(),
+        })
+        .await?;
+    ensure!(default.is_error != Some(true), "default explore failed");
+    let text = serde_json::to_string(&default)?;
+    ensure!(
+        text.contains("uniqueMarker") && text.contains("sample.ts"),
+        "default explore lost symbol name/location"
+    );
+    ensure!(
+        !text.contains("A_ONLY_739"),
+        "default explore leaked function-body marker"
+    );
+    for (name, arguments) in [
+        (
+            "codegraph_explore",
+            serde_json::json!({"query":"uniqueMarker", "maxFiles":1, "maxChars":512}),
+        ),
+        (
+            "codegraph_search",
+            serde_json::json!({"query":"uniqueMarker", "limit":1, "maxChars":512}),
+        ),
+        (
+            "codegraph_callers",
+            serde_json::json!({"symbol":"uniqueMarker", "maxChars":512}),
+        ),
+        (
+            "codegraph_impact",
+            serde_json::json!({"symbol":"uniqueMarker", "maxChars":512}),
+        ),
+    ] {
+        let result = c
+            .call_tool(CallToolRequestParam {
+                name: name.into(),
+                arguments: arguments.as_object().cloned(),
+            })
+            .await?;
+        ensure!(
+            result.is_error != Some(true),
+            "{name} failed on small project"
+        );
+        ensure!(
+            serde_json::to_string(&result)?.chars().count() <= 512,
+            "{name} exceeded serialized maxChars"
+        );
+    }
+    Ok(())
 }
 fn options(id: &str, root: &str, entry: &CodeGraphEntry, port: u16, token: &str) -> GatewayOptions {
     GatewayOptions {
@@ -98,6 +171,7 @@ async fn main() -> Result<()> {
         client(port, &token),
         client(other_port, &other_token)
     )?;
+    lightweight_contract(&a1, &args[2]).await?;
     let (first, second, other) = tokio::try_join!(
         query(&a1, "uniqueMarker"),
         query(&a2, "secondaryMarker"),
@@ -156,6 +230,6 @@ async fn main() -> Result<()> {
         std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
         "port not released"
     );
-    println!("{{\"directHttpQueries\":true,\"sameProjectMultiplexing\":true,\"crossProjectRejected\":true,\"fixedPortAndTokenRestart\":true,\"occupiedPortRejectedWithoutFallback\":true,\"portsReleased\":true}}");
+    println!("{{\"directHttpQueries\":true,\"defaultExploreSourceFree\":true,\"lightweightToolsCallable\":true,\"serializedMaxCharsRespected\":true,\"sameProjectMultiplexing\":true,\"crossProjectRejected\":true,\"fixedPortAndTokenRestart\":true,\"occupiedPortRejectedWithoutFallback\":true,\"portsReleased\":true}}");
     Ok(())
 }

@@ -81,6 +81,10 @@ impl Fixture {
         let id = uuid::Uuid::new_v4().to_string();
         let root = self.dir.path().join(&id);
         std::fs::create_dir_all(root.join(".codegraph")).unwrap();
+        rusqlite::Connection::open(root.join(".codegraph/codegraph.db"))
+            .unwrap()
+            .execute("CREATE TABLE nodes(id TEXT)", [])
+            .unwrap();
         let root = persistence::canonical(&root.to_string_lossy()).unwrap();
         let project = Project {
             id,
@@ -117,12 +121,10 @@ impl Fixture {
             "name": "codegraph_explore", "arguments": {"query": "exit"}
         }))
         .unwrap();
-        assert!(
-            tokio::time::timeout(Duration::from_secs(5), client.call_tool(request))
-                .await
-                .unwrap()
-                .is_err()
-        );
+        let result = tokio::time::timeout(Duration::from_secs(5), client.call_tool(request))
+            .await
+            .unwrap();
+        assert!(result.is_err() || result.unwrap().is_error == Some(true));
         let _ = client.cancel().await;
         assert!(!self.state.gateways.lock().await.get(id).unwrap().is_alive());
         let mut snapshot = self.state.snapshot(id);
@@ -142,7 +144,12 @@ impl Fixture {
         assert_eq!(snapshot.generation, record.generation);
         assert_eq!(
             project_gateway::probe(&record).await.unwrap(),
-            ["codegraph_explore"]
+            [
+                "codegraph_explore",
+                "codegraph_search",
+                "codegraph_callers",
+                "codegraph_impact"
+            ]
         );
         record
     }

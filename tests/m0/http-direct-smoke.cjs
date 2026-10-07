@@ -10,6 +10,9 @@ try {
     if (result.stderr) process.stderr.write(result.stderr);
     assert.equal(result.status, 0, result.error?.message || 'HTTP direct smoke failed');
     const evidence = JSON.parse(result.stdout.trim());
+    for (const key of ['defaultExploreSourceFree', 'lightweightToolsCallable', 'serializedMaxCharsRespected']) {
+        assert.strictEqual(evidence[key], true, 'missing HTTP tool contract evidence: ' + key);
+    }
     fs.writeFileSync(path.join(__dirname, 'http-direct-evidence.json'), JSON.stringify(evidence, null, 2));
     console.log(evidence);
 } finally {
