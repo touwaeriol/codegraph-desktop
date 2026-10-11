@@ -35,8 +35,10 @@ const MAX_FILE_BYTES: u64 = 2_000_000;
 const MAX_GLOB_RESULTS: usize = 100;
 const MAX_GREP_SCAN_LINES: usize = 5_000;
 const LIST_TIMEOUT: Duration = Duration::from_secs(2);
-const MODEL_TIMEOUT: Duration = Duration::from_secs(60);
-const SEARCH_TIMEOUT: Duration = Duration::from_secs(150);
+// A normal WarpGrep turn takes about 2 seconds; a stalled request is retried
+// once, and the whole search stays below Codex's default 120 s tool timeout.
+const MODEL_TIMEOUT: Duration = Duration::from_secs(20);
+const SEARCH_TIMEOUT: Duration = Duration::from_secs(100);
 const TRUNCATED_MARKER: &str = "[truncated for context limit]";
 const EXCLUDES: &[&str] = &[
     ".git",
@@ -323,11 +325,34 @@ impl Morph {
             .cloned()
             .ok_or_else(|| MorphError::new(MorphErrorKind::Protocol, "response has no message"))
     }
+    /// Retry once for transient failures: timeouts, network errors, 429 and 5xx.
+    async fn complete_retrying(
+        &self,
+        messages: &[Value],
+        max_tokens: u32,
+        log: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<Value, MorphError> {
+        match self.complete(messages, max_tokens).await {
+            Err(e)
+                if matches!(
+                    e.kind,
+                    MorphErrorKind::Network
+                        | MorphErrorKind::Unavailable
+                        | MorphErrorKind::RateLimited
+                ) =>
+            {
+                log(format!("WarpGrep model call failed, retrying once: {e}"));
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                self.complete(messages, max_tokens).await
+            }
+            result => result,
+        }
+    }
     /// Spend one minimal WarpGrep turn to prove the key, model access and credit.
     pub async fn validate(&self) -> Result<(), MorphError> {
         let probe = "<repo_structure>\n/probe\n/probe/main.rs\n</repo_structure>\n\n<search_string>\nFind the program entry point\n</search_string>\n<context_budget>0% (0K/321K chars)</context_budget>\nYou have used 0 turns and have 6 remaining";
         let message = self
-            .complete(&[json!({"role":"user","content":probe})], 128)
+            .complete_retrying(&[json!({"role":"user","content":probe})], 128, &|_| ())
             .await?;
         if parse_tool_calls(&message).is_empty()
             && message
@@ -342,7 +367,12 @@ impl Morph {
         }
         Ok(())
     }
-    pub async fn search(&self, repo: &Repo, query: &str) -> Result<SearchOutcome, MorphError> {
+    pub async fn search(
+        &self,
+        repo: &Repo,
+        query: &str,
+        log: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<SearchOutcome, MorphError> {
         let initial = {
             let repo = repo.clone();
             let query = query.to_owned();
@@ -353,15 +383,25 @@ impl Morph {
         let mut messages = vec![json!({"role":"user","content":initial})];
         for turn in 1..=MAX_TURNS {
             enforce_context_limit(&mut messages);
-            let mut message = self.complete(&messages, 2048).await;
+            let started = Instant::now();
+            let mut message = self.complete_retrying(&messages, 2048, log).await;
             if matches!(&message, Ok(m) if parse_tool_calls(m).is_empty() && m.get("content").and_then(Value::as_str).is_none_or(str::is_empty))
             {
                 // Mirrors the SDK: one retry for an empty completion.
                 tokio::time::sleep(Duration::from_millis(200)).await;
-                message = self.complete(&messages, 2048).await;
+                message = self.complete_retrying(&messages, 2048, log).await;
             }
-            let message = message?;
+            let model = started.elapsed().as_secs_f32();
+            let message = message.inspect_err(|e| {
+                log(format!(
+                    "WarpGrep turn {turn}: model failed after {model:.1}s: {e}"
+                ))
+            })?;
             let calls = parse_tool_calls(&message);
+            log(format!(
+                "WarpGrep turn {turn}: model {model:.1}s, {}",
+                summarize_calls(&calls)
+            ));
             if calls.is_empty() {
                 return Err(MorphError::new(
                     MorphErrorKind::Protocol,
@@ -392,6 +432,7 @@ impl Morph {
                     files: count,
                 });
             }
+            let started = Instant::now();
             let mut tasks = tokio::task::JoinSet::new();
             for (index, call) in calls.into_iter().enumerate() {
                 let repo = repo.clone();
@@ -405,6 +446,10 @@ impl Morph {
                     result.map_err(|e| MorphError::new(MorphErrorKind::Protocol, e.to_string()))?,
                 );
             }
+            log(format!(
+                "WarpGrep turn {turn}: local tools {:.1}s",
+                started.elapsed().as_secs_f32()
+            ));
             results.sort_by_key(|(index, _, _)| *index);
             for (_, id, content) in results {
                 messages.push(json!({"role":"tool","tool_call_id":id,"content":content}));
@@ -429,6 +474,24 @@ impl Morph {
     }
 }
 
+fn summarize_calls(calls: &[ToolCall]) -> String {
+    if calls.is_empty() {
+        return "no tool calls".into();
+    }
+    calls
+        .iter()
+        .map(|call| {
+            let args = ["pattern", "path", "glob", "command", "lines", "files"]
+                .iter()
+                .filter_map(|key| call.arguments.get(*key).and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let args: String = args.chars().take(160).collect();
+            format!("{}({args})", call.name)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 fn parse_tool_calls(message: &Value) -> Vec<ToolCall> {
     message
         .get("tool_calls")
@@ -653,6 +716,11 @@ impl Repo {
             .require_git(false)
             .follow_links(false)
             .overrides(self.overrides(include)?)
+            .filter_entry(|entry| {
+                entry.depth() == 0
+                    || !entry.file_type().is_some_and(|t| t.is_dir())
+                    || !nested_repository(entry.path())
+            })
             .sort_by_file_name(|a, b| a.cmp(b))
             .build())
     }
@@ -745,9 +813,13 @@ impl Repo {
                 if skip(&name.to_string_lossy()) {
                     continue;
                 }
-                out.push(entry.path());
                 // file_type() does not follow symlinks, so linked directories stay unexpanded.
-                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+                if is_dir && nested_repository(&entry.path()) {
+                    continue;
+                }
+                out.push(entry.path());
+                if is_dir {
                     walk(&entry.path(), depth + 1, max_depth, max, started, out);
                 }
             }
@@ -1006,6 +1078,11 @@ impl Repo {
         )
     }
 }
+/// Nested repositories and git worktrees (a `.git` file or directory) are not
+/// part of this project, matching how git itself treats them.
+fn nested_repository(dir: &Path) -> bool {
+    dir.join(".git").exists()
+}
 /// UTF-8 (lossy) text of a regular file, or None for large or binary files.
 fn read_text(path: &Path) -> Option<String> {
     let metadata = std::fs::metadata(path).ok()?;
@@ -1103,32 +1180,38 @@ impl ServerHandler for Server {
         })?;
         let morph = Morph::with_base(&key, &self.base)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let log = |line: String| {
+            if let Some(log) = &self.log {
+                log(line)
+            }
+        };
+        log(format!(
+            "WarpGrep search: {}",
+            query.chars().take(200).collect::<String>()
+        ));
         let started = Instant::now();
         let outcome = tokio::select! {
-            _ = ctx.ct.cancelled() => return Err(ErrorData::internal_error("请求已取消", None)),
-            outcome = tokio::time::timeout(SEARCH_TIMEOUT, morph.search(&self.repo, &query)) => outcome,
+            _ = ctx.ct.cancelled() => {
+                log(format!("WarpGrep cancelled by the client after {:.1}s", started.elapsed().as_secs_f32()));
+                return Err(ErrorData::internal_error("请求已取消", None));
+            }
+            outcome = tokio::time::timeout(SEARCH_TIMEOUT, morph.search(&self.repo, &query, &log)) => outcome,
         };
         let elapsed = started.elapsed().as_secs_f32();
         let result = match outcome {
             Ok(Ok(outcome)) => {
-                if let Some(log) = &self.log {
-                    log(format!(
-                        "WarpGrep: {} turn(s), {} file(s), {elapsed:.1}s",
-                        outcome.turns, outcome.files
-                    ));
-                }
+                log(format!(
+                    "WarpGrep: {} turn(s), {} file(s), {elapsed:.1}s",
+                    outcome.turns, outcome.files
+                ));
                 CallToolResult::success(vec![Content::text(outcome.text)])
             }
             Ok(Err(e)) => {
-                if let Some(log) = &self.log {
-                    log(format!("WarpGrep failed after {elapsed:.1}s: {e}"));
-                }
+                log(format!("WarpGrep failed after {elapsed:.1}s: {e}"));
                 CallToolResult::error(vec![Content::text(format!("Search failed: {e}"))])
             }
             Err(_) => {
-                if let Some(log) = &self.log {
-                    log(format!("WarpGrep timed out after {elapsed:.1}s"));
-                }
+                log(format!("WarpGrep timed out after {elapsed:.1}s"));
                 CallToolResult::error(vec![Content::text(format!(
                     "Search failed: timed out after {}s",
                     SEARCH_TIMEOUT.as_secs()
@@ -1454,14 +1537,32 @@ mod tests {
 
     /// Fake Morph endpoint: grep first, then finish with the hit.
     async fn fake_morph(status: u16) -> (String, Arc<std::sync::Mutex<Vec<Value>>>) {
+        fake_morph_flaky(status, 0).await
+    }
+    /// `transient` leading requests fail with 503 before normal behaviour.
+    async fn fake_morph_flaky(
+        status: u16,
+        transient: usize,
+    ) -> (String, Arc<std::sync::Mutex<Vec<Value>>>) {
         let seen = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
         let record = seen.clone();
+        let failures = Arc::new(std::sync::Mutex::new(transient));
         let app = Router::new().route(
             "/v1/chat/completions",
             axum::routing::post(move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<Value>| {
                 let record = record.clone();
+                let failures = failures.clone();
                 async move {
                     use axum::response::IntoResponse;
+                    let transient = {
+                        let mut left = failures.lock().unwrap();
+                        let fail = *left > 0;
+                        *left = left.saturating_sub(1);
+                        fail
+                    };
+                    if transient {
+                        return (axum::http::StatusCode::SERVICE_UNAVAILABLE, "busy").into_response();
+                    }
                     if status != 200 {
                         return (
                             axum::http::StatusCode::from_u16(status).unwrap(),
@@ -1493,10 +1594,25 @@ mod tests {
         let (base, seen) = fake_morph(200).await;
         let morph = Morph::with_base("sk-test-1234567890", &base).unwrap();
         morph.validate().await.unwrap();
+        let lines = std::sync::Mutex::new(Vec::<String>::new());
         let outcome = morph
-            .search(&repo, "Where is login implemented?")
+            .search(&repo, "Where is login implemented?", &|line| {
+                lines.lock().unwrap().push(line)
+            })
             .await
             .unwrap();
+        let lines = lines.into_inner().unwrap();
+        assert!(
+            lines[0].starts_with("WarpGrep turn 1: model ")
+                && lines[0].ends_with("grep_search(fn login)"),
+            "{lines:?}"
+        );
+        assert!(lines
+            .iter()
+            .any(|l| l.starts_with("WarpGrep turn 1: local tools ")));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("turn 2") && l.contains("finish(src/auth/login.rs:3-5)")));
         assert_eq!((outcome.turns, outcome.files), (2, 1));
         assert!(
             outcome.text.contains("pub fn login(user: &str) -> bool {"),
@@ -1520,6 +1636,79 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("You have used 1 turn and have 5 remaining"));
+    }
+
+    #[tokio::test]
+    async fn transient_model_failures_are_retried_once() {
+        let (_dir, repo) = fixture();
+        let (base, _) = fake_morph_flaky(200, 1).await;
+        let morph = Morph::with_base("sk-test-1234567890", &base).unwrap();
+        let lines = std::sync::Mutex::new(Vec::<String>::new());
+        let outcome = morph
+            .search(&repo, "Where is login implemented?", &|line| {
+                lines.lock().unwrap().push(line)
+            })
+            .await
+            .unwrap();
+        assert_eq!(outcome.files, 1);
+        assert!(lines.lock().unwrap()[0]
+            .starts_with("WarpGrep model call failed, retrying once: MORPH_UNAVAILABLE: HTTP 503"));
+        // Two consecutive failures exhaust the single retry.
+        let (base, _) = fake_morph_flaky(200, 2).await;
+        let error = Morph::with_base("sk-test-1234567890", &base)
+            .unwrap()
+            .search(&repo, "Where is login implemented?", &|_| ())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.kind, MorphErrorKind::Unavailable);
+    }
+
+    #[test]
+    fn nested_repositories_and_worktrees_are_not_searched() {
+        let (dir, repo) = fixture();
+        let snapshot = dir.path().join("artifacts/old-snapshot/src");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(
+            dir.path().join("artifacts/old-snapshot/.git"),
+            "gitdir: elsewhere
+",
+        )
+        .unwrap();
+        std::fs::write(
+            snapshot.join("copy.rs"),
+            "pub fn login() {}
+",
+        )
+        .unwrap();
+        let nested = dir.path().join("vendored-repo");
+        std::fs::create_dir_all(nested.join(".git")).unwrap();
+        std::fs::write(
+            nested.join("lib.rs"),
+            "fn login() {}
+",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("artifacts/notes.rs"),
+            "// login notes
+",
+        )
+        .unwrap();
+        let grep = repo.grep("login", ".", None);
+        assert!(
+            !grep.contains("old-snapshot") && !grep.contains("vendored-repo"),
+            "{grep}"
+        );
+        assert!(grep.contains("artifacts/notes.rs"), "{grep}");
+        let glob = repo.glob("*.rs", None);
+        assert!(glob.starts_with("Found 3 file(s)"), "{glob}");
+        let state = repo.initial_state("login");
+        assert!(
+            !state.contains("old-snapshot") && !state.contains("vendored-repo"),
+            "{state}"
+        );
+        assert!(state.contains("notes.rs"), "{state}");
     }
 
     #[tokio::test]
