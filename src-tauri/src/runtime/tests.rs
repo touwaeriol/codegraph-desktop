@@ -63,6 +63,8 @@ impl Fixture {
                 http_host: Default::default(),
                 serena_instances: Default::default(),
                 serena_snapshots: Default::default(),
+                warpgrep_instances: Default::default(),
+                morph_key: Default::default(),
                 locks: Default::default(),
                 previews: Default::default(),
                 tasks: Default::default(),

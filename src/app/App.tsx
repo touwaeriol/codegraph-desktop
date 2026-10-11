@@ -63,6 +63,7 @@ import {
 import { call, desktop, message, subscribe } from "@/lib/ipc";
 import { ExternalLink } from "@/components/ExternalLink";
 import type {
+  Engine,
   Environment,
   Project,
   RuntimeSnapshot,
@@ -70,6 +71,7 @@ import type {
   TaskProgress,
 } from "@/lib/types";
 import { SerenaPanel, SerenaSettings, useSerena } from "./Serena";
+import { WarpGrepPanel, WarpGrepSettings, useWarpGrep } from "./WarpGrep";
 import { ProjectTools } from "./ProjectTools";
 import {
   EngineStatus as Status,
@@ -135,8 +137,42 @@ export default function App() {
       detail: string;
       action: () => Promise<void>;
     } | null>(null);
-  const [engine, setEngine] = useState<"codegraph" | "serena">("codegraph");
+  const [engine, setEngine] = useState<Engine>("codegraph");
   const serena = useSerena(selected);
+  const warpgrep = useWarpGrep(selected);
+  const morphKeyHint = settings?.morphKeyHint ?? null;
+  // Serena and WarpGrep share the same start/stop surface in the header.
+  const auxiliary =
+    engine === "serena"
+      ? {
+          name: "Serena",
+          snapshot: serena.snapshot,
+          busy: serena.busy && serena.snapshot.state !== "starting",
+          disabled: !desktop,
+          run: (action: "start" | "stop" | "restart") =>
+            void serena.run(action),
+          cancel: () =>
+            void serena.cancel().catch((e) => toast.error(message(e))),
+          mode: t("单项目模式"),
+          error: "",
+        }
+      : engine === "warpgrep"
+        ? {
+            name: "WarpGrep",
+            snapshot: warpgrep.snapshot,
+            busy: warpgrep.busy,
+            disabled: !desktop || !morphKeyHint,
+            run: (action: "start" | "stop" | "restart") =>
+              void warpgrep.run(action),
+            cancel: () => undefined,
+            mode: morphKeyHint ? t("共享网关路由") : t("需先验证 Morph API Key"),
+            error: warpgrep.error || warpgrep.snapshot.error?.message || "",
+          }
+        : null;
+  const engineRunning = (id: string) =>
+    snapshots[id]?.state === "running" ||
+    serena.snapshots[id]?.state === "running" ||
+    warpgrep.snapshots[id]?.state === "running";
   const searchRef = useRef<HTMLInputElement>(null);
   const [section, setSection] = useState<"project" | "settings">("project");
   const [settingsError, setSettingsError] = useState("");
@@ -408,8 +444,13 @@ export default function App() {
       projects.map(async (p) => {
         try {
           await call(`${action}_project`, { projectId: p.id });
-          if (action === "stop")
+          if (action === "stop") {
             await call("serena_operation", { projectId: p.id, action: "stop" });
+            await call("warpgrep_operation", {
+              projectId: p.id,
+              action: "stop",
+            });
+          }
           return {
             projectId: p.id,
             action,
@@ -436,9 +477,7 @@ export default function App() {
     .filter(
       (p) =>
         `${p.name} ${p.rootPath}`.toLowerCase().includes(query.toLowerCase()) &&
-        (filter !== "running" ||
-          snapshots[p.id]?.state === "running" ||
-          serena.snapshots[p.id]?.state === "running"),
+        (filter !== "running" || engineRunning(p.id)),
     )
     .sort((a, b) =>
       sort === "recent"
@@ -484,13 +523,7 @@ export default function App() {
                 {t("全部")}
                 {projects.length}
                 {t("· 运行中")}{" "}
-                {
-                  projects.filter(
-                    (p) =>
-                      snapshots[p.id]?.state === "running" ||
-                      serena.snapshots[p.id]?.state === "running",
-                  ).length
-                }
+                {projects.filter((p) => engineRunning(p.id)).length}
               </span>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -573,6 +606,14 @@ export default function App() {
                       snapshot={serena.snapshots[p.id] ?? { state: "stopped" }}
                     />
                   </div>
+                  <div>
+                    <span>WarpGrep</span>
+                    <Status
+                      snapshot={
+                        warpgrep.snapshots[p.id] ?? { state: "stopped" }
+                      }
+                    />
+                  </div>
                 </div>
                 <div
                   className="mono text-[11px] text-muted-foreground truncate mt-2"
@@ -649,6 +690,7 @@ export default function App() {
                   settings={settings}
                   environment={environment}
                   busy={busy}
+                  refresh={refresh}
                   detect={async (selectedPath) => {
                     setBusy(true);
                     setSettingsError("");
@@ -781,17 +823,11 @@ export default function App() {
                     </div>
                     <EngineActions
                       state={
-                        engine === "serena"
-                          ? serena.snapshot.state
-                          : snapshot?.state
+                        auxiliary ? auxiliary.snapshot.state : snapshot?.state
                       }
-                      busy={
-                        engine === "serena"
-                          ? serena.busy && serena.snapshot.state !== "starting"
-                          : busy
-                      }
+                      busy={auxiliary ? auxiliary.busy : busy}
                       disabled={
-                        engine === "serena" ? !desktop : !environment?.available
+                        auxiliary ? auxiliary.disabled : !environment?.available
                       }
                       startLabel={
                         engine === "codegraph" &&
@@ -800,45 +836,42 @@ export default function App() {
                           : undefined
                       }
                       onStart={() => {
-                        if (engine === "serena") void serena.run("start");
+                        if (auxiliary) auxiliary.run("start");
                         else if (snapshot?.indexState === "missing")
                           void indexing("init");
                         else void runtime("start");
                       }}
                       onStop={() => {
-                        if (engine === "serena") void serena.run("stop");
+                        if (auxiliary) auxiliary.run("stop");
                         else void runtime("stop");
                       }}
                       onRestart={() => {
-                        if (engine === "serena") void serena.run("restart");
+                        if (auxiliary) auxiliary.run("restart");
                         else void runtime("restart");
                       }}
                       onCancel={() => {
-                        if (engine === "serena")
-                          void serena
-                            .cancel()
-                            .catch((e) => toast.error(message(e)));
+                        if (auxiliary) auxiliary.cancel();
                         else void cancelStartup();
                       }}
                     />
                   </div>
                   <div className="engine-header-status">
-                    <span>{engine === "serena" ? "Serena" : "CodeGraph"}</span>
+                    <span>{auxiliary ? auxiliary.name : "CodeGraph"}</span>
                     <Status
-                      snapshot={
-                        engine === "serena" ? serena.snapshot : snapshot
-                      }
+                      snapshot={auxiliary ? auxiliary.snapshot : snapshot}
                     />
                     <span>
-                      {engine === "serena"
-                        ? t("单项目模式")
+                      {auxiliary
+                        ? auxiliary.mode
                         : snapshot
                           ? indexNames()[snapshot.indexState]
                           : t("索引尚未获取")}
                     </span>
                     <span>
-                      {engine === "serena"
-                        ? t("{0} 个工具", { 0: serena.snapshot.tools.length })
+                      {auxiliary
+                        ? t("{0} 个工具", {
+                            0: auxiliary.snapshot.tools.length,
+                          })
                         : t("{0} 个会话", { 0: snapshot?.sessions ?? 0 })}
                     </span>
                   </div>
@@ -909,6 +942,22 @@ export default function App() {
                       </span>
                       <Status snapshot={serena.snapshot} />
                     </button>
+                    <button
+                      aria-pressed={engine === "warpgrep"}
+                      onClick={() => {
+                        setEngine("warpgrep");
+                        changeTab("overview");
+                      }}
+                    >
+                      <span className="engine-symbol">
+                        <Search size={20} />
+                      </span>
+                      <span>
+                        <strong>WarpGrep</strong>
+                        <small>{t("自然语言代码检索")}</small>
+                      </span>
+                      <Status snapshot={warpgrep.snapshot} />
+                    </button>
                   </div>
                   <Tabs value={tab} onValueChange={changeTab}>
                     <TabsList className="mb-5">
@@ -917,7 +966,14 @@ export default function App() {
                       <TabsTrigger value="logs">{t("运行日志")}</TabsTrigger>
                     </TabsList>
                     <TabsContent value="overview">
-                      {engine === "serena" ? (
+                      {engine === "warpgrep" ? (
+                        <WarpGrepPanel
+                          runtime={warpgrep}
+                          keyHint={morphKeyHint}
+                          settings={openSettings}
+                          configure={() => changeTab("config")}
+                        />
+                      ) : engine === "serena" ? (
                         <SerenaPanel
                           runtime={serena}
                           settings={openSettings}
@@ -1055,6 +1111,8 @@ export default function App() {
                       key={`${selected}:${engine}`}
                       engine={engine}
                       serena={serena.snapshot}
+                      warpgrep={warpgrep.snapshot}
+                      morphReady={!!morphKeyHint}
                       project={project}
                       snapshot={snapshot}
                       tab={tab}
@@ -1387,12 +1445,14 @@ function SettingsForm({
   settings,
   environment,
   busy,
+  refresh,
   save,
   detect,
 }: {
   settings: Settings | null;
   environment: Environment | null;
   busy: boolean;
+  refresh: () => Promise<void>;
   save: (action: () => Promise<unknown>, notify?: boolean) => Promise<void>;
   detect: (selectedPath: string) => Promise<Environment | null>;
 }) {
@@ -1408,7 +1468,7 @@ function SettingsForm({
       <section aria-labelledby="runtime-settings-title">
         <div className="settings-section-heading">
           <h2 id="runtime-settings-title">{t("运行环境")}</h2>
-          <p>{t("两个独立引擎，可分别配置和运行。")}</p>
+          <p>{t("各引擎相互独立，可分别配置和运行。")}</p>
         </div>
         <div className="settings-engines">
           <EngineSettingsCard
@@ -1485,6 +1545,7 @@ function SettingsForm({
             </Field>
           </EngineSettingsCard>
           <SerenaSettings entry={settings?.serenaEntry} />
+          <WarpGrepSettings settings={settings} onChange={refresh} />
         </div>
       </section>
       <section aria-labelledby="preferences-title">

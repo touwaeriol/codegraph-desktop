@@ -11,7 +11,9 @@
         { "url": "https://github.com/colbymchenry/codegraph" },
         {
           "url": "https://oraios.github.io/serena/02-usage/010_installation.html"
-        }
+        },
+        { "url": "https://morphllm.com/dashboard/api-keys" },
+        { "url": "https://docs.morphllm.com/sdk/components/warp-grep" }
       ]
     }
   ]

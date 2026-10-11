@@ -3,6 +3,7 @@ mod entry;
 mod job;
 mod policy;
 pub mod relay;
+pub mod warpgrep;
 use anyhow::Context;
 use axum::{
     extract::{Request, State},
@@ -45,10 +46,15 @@ pub struct SharedGateway {
 async fn dispatch(State(routes): State<Routes>, request: Request) -> Response {
     use axum::response::IntoResponse;
     let path = request.uri().path();
-    let id = path
-        .strip_prefix("/mcp/")
-        .or_else(|| path.strip_prefix("/identity/"));
-    let route = id.and_then(|id| routes.read().unwrap().get(id).cloned());
+    let key = match path.strip_prefix("/warpgrep/") {
+        Some(id) => Some(warpgrep::route_key(id)),
+        None => path
+            .strip_prefix("/mcp/")
+            .or_else(|| path.strip_prefix("/identity/"))
+            .filter(|id| !id.contains('/'))
+            .map(str::to_owned),
+    };
+    let route = key.and_then(|key| routes.read().unwrap().get(&key).cloned());
     match route {
         Some((router, cancel)) if !cancel.is_cancelled() => {
             tokio::select! {
@@ -528,6 +534,31 @@ pub async fn connect_native_http(endpoint: &str) -> anyhow::Result<RunningServic
         ),
     );
     Ok(tokio::time::timeout(Duration::from_secs(5), ().serve(transport)).await??)
+}
+/// Connect to a desktop-served route that requires the project bearer token.
+pub async fn connect_http(
+    endpoint: &str,
+    token: &str,
+) -> anyhow::Result<RunningService<RoleClient, ()>> {
+    let http = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(2))
+        .build()?;
+    let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
+        http,
+        rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(
+            endpoint.to_owned(),
+        )
+        .auth_header(token.to_owned()),
+    );
+    Ok(tokio::time::timeout(Duration::from_secs(5), ().serve(transport)).await??)
+}
+pub async fn probe_http(endpoint: &str, token: &str) -> anyhow::Result<Vec<String>> {
+    let client = connect_http(endpoint, token).await?;
+    let result = tokio::time::timeout(Duration::from_secs(5), client.list_all_tools()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), client.cancel()).await;
+    Ok(result??.into_iter().map(|t| t.name.to_string()).collect())
 }
 pub async fn probe_native_http(endpoint: &str) -> anyhow::Result<Vec<String>> {
     let client = connect_native_http(endpoint).await?;

@@ -32,6 +32,8 @@ export interface Settings {
   language: "en" | "zh-CN";
   codegraphEntry: string | null;
   serenaEntry?: string | null;
+  morphKeyHint?: string | null;
+  morphKeyValidatedAt?: string | null;
   indexConcurrency: number;
   closeBehavior: "tray" | "exit";
   appDataDir: string;
@@ -88,7 +90,7 @@ export interface ConfigStatus {
   message: string | null;
 }
 export type Client = "codex" | "claude";
-export type Engine = "codegraph" | "serena";
+export type Engine = "codegraph" | "serena" | "warpgrep";
 export interface SerenaSnapshot {
   state: RuntimeSnapshot["state"];
   pid: number | null;
@@ -97,3 +99,4 @@ export interface SerenaSnapshot {
   tools: string[];
   error: { code: string; message: string } | null;
 }
+export type WarpGrepSnapshot = SerenaSnapshot;

@@ -200,6 +200,10 @@ pub fn set_setting(db: &Connection, key: &str, value: &str) -> Result<()> {
     db.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,value])?;
     Ok(())
 }
+pub fn delete_setting(db: &Connection, key: &str) -> Result<()> {
+    db.execute("DELETE FROM settings WHERE key=?1", [key])?;
+    Ok(())
+}
 pub fn language(db: &Connection) -> Result<String> {
     let saved = setting(db, "language")?;
     Ok(crate::i18n::effective(saved.as_deref(), Some(crate::i18n::system_language())).into())

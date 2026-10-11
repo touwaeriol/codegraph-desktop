@@ -10,6 +10,7 @@ import {
   Loader2,
   Play,
   RefreshCw,
+  Search,
   Square,
   TriangleAlert,
 } from "lucide-react";
@@ -266,7 +267,13 @@ export function EngineSettingsCard({
       <CardHeader>
         <div className="flex items-center gap-3">
           <span className="engine-symbol">
-            {name === "Serena" ? <Code2 size={20} /> : <GitBranch size={20} />}
+            {name === "Serena" ? (
+              <Code2 size={20} />
+            ) : name === "WarpGrep" ? (
+              <Search size={20} />
+            ) : (
+              <GitBranch size={20} />
+            )}
           </span>
           <div className="min-w-0">
             <CardTitle>{name}</CardTitle>

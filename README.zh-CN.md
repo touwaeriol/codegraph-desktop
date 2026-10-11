@@ -57,6 +57,19 @@ Serena 通过 `--context ide --project <绝对路径>` 单项目模式启动原�
 
 停止 Serena 不影响 CodeGraph 或其他项目。退出应用、安装器请求退出、删除/迁移项目和“全部停止”都会回收受管 Serena 进程树。原有项目自动启动设置仍用于 CodeGraph，Serena 需主动启动。安装包不内置 Serena，需要自行安装其入口。已在 Windows 使用 Serena 1.7.0 验证原生 HTTP 和符号查询；macOS/Linux 的 Serena 运行验收与跨平台编译分别进行。
 
+## WarpGrep（可选引擎）
+
+[Morph WarpGrep](https://docs.morphllm.com/sdk/components/warp-grep) 是自然语言代码检索子代理：`morph-warp-grep-v2.1` 模型规划多轮 grep、列目录和读取，最终返回相关文件与行段。桌面应用在项目网关内原生实现 WarpGrep 协议，不依赖 Node 包或 `npx` 进程。
+
+1. 在 [Morph 控制台](https://morphllm.com/dashboard/api-keys) 创建 API Key。
+2. 在“设置 → WarpGrep”中粘贴 Key，点击“验证并保存”。保存前会真实调用一次 WarpGrep 模型（约 1K tokens），成功才保存；Key 无效、额度不足、限流或网络失败都会提示且不保存。设置页只显示脱敏提示。“移除”会删除 Key 并停止所有运行中的 WarpGrep 路由。
+3. 选择项目和 WarpGrep，点击“启动实例”。未验证 Key 时拒绝启动；无需 CodeGraph 索引。
+4. 在“MCP 配置”中勾选 WarpGrep（验证 Key 后可选）及其他引擎并应用。客户端获得 `warpgrep` 条目，地址为 `http://127.0.0.1:<共享端口>/warpgrep/<项目ID>`，使用项目鉴权令牌。
+
+路由只暴露一个只读工具 `codebase_search`（参数 `search_string`，可选 `maxChars`，默认 12000）。模型发起的 grep/读取/列目录/glob 均在本机、且只在绑定的项目根目录内执行：绝对路径、`..` 越界及指向项目外的符号链接会被拒绝，常见依赖/构建目录、隐藏文件、二进制和超过 2 MB 的文件会跳过。每次检索最多 6 轮、150 秒，每个项目最多 4 个并发检索；检索摘要写入项目运行日志。
+
+Morph API Key 保存在仅当前用户可访问的应用数据目录中的应用数据库内，不写入项目配置文件。**检索过程中读取的代码片段会发送至 Morph API**，启用前请确认符合各项目的代码外发要求。停止 WarpGrep、删除/迁移项目、“全部停止”和退出应用都会注销路由。
+
 ## 本地开发
 
 通用依赖：Node.js 22+、Rust stable，以及本机安装的 CodeGraph。按目标系统安装 [Tauri 原生构建依赖](https://v2.tauri.app/start/prerequisites/)：Windows 使用 MSVC/Windows SDK/WebView2，macOS 使用 Xcode 命令行工具，Linux 使用 WebKitGTK 4.1、GTK/AppIndicator 等依赖。每种架构在对应原生环境构建。

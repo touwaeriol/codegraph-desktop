@@ -375,5 +375,41 @@ export const english = {
   英文: "English",
   "首次启动使用系统语言；手动选择会保存。":
     "The system language is used at first launch. Your manual choice is saved.",
+  "各引擎相互独立，可分别配置和运行。":
+    "Each engine is independent and can be configured and run separately.",
+  自然语言代码检索: "Natural-language code search",
+  "Morph API Key": "Morph API key",
+  "粘贴 Morph API Key（sk-…）": "Paste a Morph API key (sk-…)",
+  验证并保存: "Validate and save",
+  移除: "Remove",
+  "API Key 验证通过并已保存": "API key validated and saved",
+  "API Key 已移除，运行中的 WarpGrep 已停止":
+    "API key removed. Running WarpGrep routes were stopped",
+  "已验证：{0}": "Validated: {0}",
+  "验证时间：{0}": "Validated at: {0}",
+  "尚未配置 API Key": "No API key configured",
+  "保存前会用此 Key 真实调用一次 WarpGrep 模型（约 1K tokens），验证通过才保存。Key 仅保存在本机应用数据目录，不会写入项目配置。":
+    "Before saving, the key makes one real WarpGrep model call (about 1K tokens) and is saved only if it succeeds. The key stays in the local application data directory and is never written to project configuration.",
+  "获取 Morph API Key ↗": "Get a Morph API key ↗",
+  "WarpGrep 文档 ↗": "WarpGrep documentation ↗",
+  "检索时读取的项目代码片段会发送至 Morph API 处理，请确认符合项目的代码外发要求。":
+    "Code excerpts read during a search are sent to the Morph API. Make sure this is allowed for the project.",
+  "仅提供只读工具 codebase_search：模型规划 grep、列目录与读取，桌面应用只在当前项目目录内本地执行，不访问项目外文件。":
+    "Only the read-only codebase_search tool is exposed: the model plans grep, listing and reads, and the desktop app executes them locally inside this project only.",
+  "需先在设置中配置并验证 Morph API Key，才能启动 WarpGrep。":
+    "Configure and validate a Morph API key in Settings before starting WarpGrep.",
+  "前往设置": "Open Settings",
+  检索模型: "Search model",
+  共享网关路由: "Shared gateway route",
+  "启动 WarpGrep": "Start WarpGrep",
+  "需先验证 Morph API Key": "Validate a Morph API key first",
+  "客户端 HTTP → 共享网关 → 当前项目 WarpGrep 路由 → Morph API":
+    "HTTP client → shared gateway → project WarpGrep route → Morph API",
+  "WarpGrep 与 CodeGraph 共用固定端口和项目令牌，通过 /warpgrep/项目ID 路由连接，且无需 CodeGraph 索引。API Key 只保存在本机，不写入项目配置；检索时读取的代码片段会发送至 Morph API。":
+    "WarpGrep shares CodeGraph's fixed port and project token through the /warpgrep/project-ID route and needs no CodeGraph index. The API key stays on this computer and is never written to project configuration; code excerpts read during searches are sent to the Morph API.",
+  "可同时配置多个 MCP，一次预览并写入所选客户端的项目配置。":
+    "Select several MCPs to preview and apply them together in the selected clients' project configuration.",
+  "在 MCP 配置中勾选需要的 MCP（CodeGraph、Serena、WarpGrep），选择客户端，预览并应用后重新加载客户端。使用前分别启动所需实例。":
+    "Select the MCPs you need (CodeGraph, Serena, WarpGrep) in MCP configuration, choose your clients, preview and apply, then reload the clients. Start each required engine before use.",
 } as const;
 export type MessageKey = keyof typeof english;

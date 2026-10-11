@@ -18,6 +18,8 @@ reqwest = { version = "0.12", features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
 rand = "0.8"
 url = "2"
+ignore = "0.4"
+regex = "1"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Security"] }
 

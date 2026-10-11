@@ -76,10 +76,15 @@ function statusLabel(value: string) {
   };
   return labels[value] ?? value;
 }
+const ENGINES = ["codegraph", "serena", "warpgrep"] as const;
+const engineLabel = (value: Engine) =>
+  ({ codegraph: "CodeGraph", serena: "Serena", warpgrep: "WarpGrep" })[value];
 
 export function ProjectTools({
   engine = "codegraph",
   serena,
+  warpgrep,
+  morphReady = false,
   project,
   snapshot,
   tab,
@@ -87,19 +92,26 @@ export function ProjectTools({
 }: {
   engine?: Engine;
   serena?: SerenaSnapshot;
+  warpgrep?: SerenaSnapshot;
+  morphReady?: boolean;
   project: Project;
   snapshot?: RuntimeSnapshot;
   tab: string;
   refresh: () => Promise<void>;
 }) {
   const language = useLanguage();
-  const [engines, setEngines] = useState<Engine[]>(["codegraph", "serena"]);
+  const [engines, setEngines] = useState<Engine[]>(() =>
+    morphReady ? [...ENGINES] : ["codegraph", "serena"],
+  );
   const running =
     engines.length > 0 &&
-    engines.every((value) =>
-      value === "serena"
-        ? serena?.state === "running"
-        : snapshot?.state === "running",
+    engines.every(
+      (value) =>
+        ({
+          codegraph: snapshot?.state,
+          serena: serena?.state,
+          warpgrep: warpgrep?.state,
+        })[value] === "running",
     );
   useEffect(() => {
     setError("");
@@ -172,7 +184,7 @@ export function ProjectTools({
   async function fetchStatuses() {
     return (
       await Promise.all(
-        (["codegraph", "serena"] as const).map(async (engine) =>
+        ENGINES.map(async (engine) =>
           (
             await call<ConfigStatus[]>("get_client_config_status", {
               engine,
@@ -534,16 +546,29 @@ export function ProjectTools({
           <CardHeader>
             <CardTitle>{t("选择 MCP")}</CardTitle>
             <CardDescription>
-              {t("可同时配置两个 MCP，一次预览并写入所选客户端的项目配置。")}
+              {t("可同时配置多个 MCP，一次预览并写入所选客户端的项目配置。")}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-6">
-            {(["codegraph", "serena"] as const).map((value) => (
-              <label key={value} className="flex items-center gap-2">
+            {ENGINES.map((value) => (
+              <label
+                key={value}
+                className="flex items-center gap-2"
+                title={
+                  value === "warpgrep" && !morphReady
+                    ? t("需先验证 Morph API Key")
+                    : undefined
+                }
+              >
                 <input
                   type="checkbox"
                   checked={engines.includes(value)}
-                  disabled={busy}
+                  disabled={
+                    busy ||
+                    (value === "warpgrep" &&
+                      !morphReady &&
+                      !engines.includes(value))
+                  }
                   onChange={(e) => {
                     setProbe(null);
                     setEngines((old) =>
@@ -553,7 +578,12 @@ export function ProjectTools({
                     );
                   }}
                 />
-                {value === "codegraph" ? "CodeGraph MCP" : "Serena MCP"}
+                {engineLabel(value)} MCP
+                {value === "warpgrep" && !morphReady && (
+                  <span className="text-xs text-muted-foreground">
+                    · {t("需先验证 Morph API Key")}
+                  </span>
+                )}
               </label>
             ))}
           </CardContent>
@@ -587,13 +617,13 @@ export function ProjectTools({
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {(["codegraph", "serena"] as const).map((value) => {
+                  {ENGINES.map((value) => {
                     const status = statuses.find(
                       (s) => s.client === client && s.engine === value,
                     );
                     return (
                       <Badge variant="secondary" key={value}>
-                        {value === "codegraph" ? "CodeGraph" : "Serena"} ·{" "}
+                        {engineLabel(value)} ·{" "}
                         {status
                           ? {
                               missing: t("未配置"),
@@ -632,20 +662,24 @@ export function ProjectTools({
           <CardContent>
             {engines.map((value) => (
               <div key={value} className="mb-4">
-                <p className="text-sm font-medium">
-                  {value === "codegraph" ? "CodeGraph" : "Serena"}
-                </p>
+                <p className="text-sm font-medium">{engineLabel(value)}</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {value === "serena"
                     ? t("客户端 HTTP → 当前项目 Serena")
-                    : t("客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph")}
+                    : value === "warpgrep"
+                      ? t(
+                          "客户端 HTTP → 共享网关 → 当前项目 WarpGrep 路由 → Morph API",
+                        )
+                      : t("客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph")}
                 </p>
                 <p className="mono text-xs mt-2 break-all">
                   {value === "serena"
                     ? serena?.endpoint
-                    : snapshot?.port
-                      ? `http://127.0.0.1:${snapshot.port}/mcp/${project.id}`
-                      : null}
+                    : value === "warpgrep"
+                      ? warpgrep?.endpoint
+                      : snapshot?.port
+                        ? `http://127.0.0.1:${snapshot.port}/mcp/${project.id}`
+                        : null}
                 </p>
               </div>
             ))}
@@ -668,6 +702,13 @@ export function ProjectTools({
                 )}
               </p>
             )}
+            {engines.includes("warpgrep") && (
+              <p className="text-xs text-muted-foreground leading-6 mt-2">
+                {t(
+                  "WarpGrep 与 CodeGraph 共用固定端口和项目令牌，通过 /warpgrep/项目ID 路由连接，且无需 CodeGraph 索引。API Key 只保存在本机，不写入项目配置；检索时读取的代码片段会发送至 Morph API。",
+                )}
+              </p>
+            )}
             <div className="toolbar mt-4">
               <Button
                 variant="ghost"
@@ -684,7 +725,7 @@ export function ProjectTools({
                   void navigator.clipboard
                     .writeText(
                       t(
-                        "在 MCP 配置中勾选 CodeGraph 和 Serena，选择客户端，预览并应用后重新加载客户端。使用前分别启动所需实例。",
+                        "在 MCP 配置中勾选需要的 MCP（CodeGraph、Serena、WarpGrep），选择客户端，预览并应用后重新加载客户端。使用前分别启动所需实例。",
                       ),
                     )
                     .then(() => toast.success(t("接入说明已复制")))

@@ -80,6 +80,7 @@ pub async fn relocate_project(
     let canonical = persistence::canonical(&selected_path)?;
     crate::runtime::stop(&app, &state, &project_id).await?;
     crate::serena::stop(&state, &project_id).await?;
+    crate::warpgrep::stop(&state, &project_id).await;
     if p.canonical_path != canonical.to_string_lossy()
         && !p.previous_roots.contains(&p.canonical_path)
     {
@@ -103,6 +104,7 @@ pub async fn remove_project(
     state.project(&project_id)?;
     crate::runtime::stop(&app, &state, &project_id).await?;
     crate::serena::stop(&state, &project_id).await?;
+    crate::warpgrep::stop(&state, &project_id).await;
     state
         .db
         .lock()
@@ -121,6 +123,10 @@ pub fn settings(state: &AppState) -> Result<Settings> {
         language: persistence::language(&db)?,
         codegraph_entry: persistence::setting(&db, "codegraphEntry")?,
         serena_entry: persistence::setting(&db, "serenaEntry")?,
+        morph_key_hint: crate::warpgrep::saved_key(&db)?
+            .as_deref()
+            .map(crate::warpgrep::key_hint),
+        morph_key_validated_at: crate::warpgrep::validated_at(&db)?,
         index_concurrency: persistence::setting(&db, "indexConcurrency")?
             .and_then(|s| s.parse().ok())
             .unwrap_or(2),
@@ -395,6 +401,7 @@ fn binding_for(state: &AppState, id: &str, engine: Option<&str>) -> Result<confi
             })
         }
         "serena" => crate::serena::binding(state, id),
+        "warpgrep" => crate::warpgrep::binding(state, id),
         _ => Err(AppError::new(
             "INVALID_ENGINE",
             crate::i18n::tr("不支持的引擎", "Unknown engine"),
@@ -426,6 +433,9 @@ pub fn preview_client_config(
 ) -> Result<configuration::ConfigPreview> {
     let p = state.project(&project_id)?;
     let engines = engines.unwrap_or_else(|| vec![engine.unwrap_or_else(|| "codegraph".into())]);
+    if action == "install" && engines.iter().any(|e| e == "warpgrep") {
+        crate::warpgrep::require_key(&state)?;
+    }
     let mut targets = Vec::new();
     for engine in engines {
         let target = binding_for(&state, &project_id, Some(&engine))?;
@@ -585,8 +595,31 @@ pub async fn test_project_mcp(
     engine: Option<String>,
 ) -> Result<ProbeResult> {
     state.project(&project_id)?;
-    if !["codegraph", "serena"].contains(&engine.as_deref().unwrap_or("codegraph")) {
+    if !["codegraph", "serena", "warpgrep"].contains(&engine.as_deref().unwrap_or("codegraph")) {
         return Err(AppError::new("INVALID_ENGINE", "Unknown engine"));
+    }
+    if engine.as_deref() == Some("warpgrep") {
+        if !crate::warpgrep::is_running(&state, &project_id).await {
+            return Err(AppError::new(
+                "SERVICE_NOT_RUNNING",
+                crate::i18n::tr("WarpGrep 尚未启动", "WarpGrep is not running"),
+            ));
+        }
+        let binding = http_binding(&state, &project_id)?;
+        let target = crate::warpgrep::binding(&state, &project_id)?;
+        let tools = project_gateway::probe_http(&target.endpoint, &binding.token)
+            .await
+            .map_err(|e| AppError::new("MCP_HANDSHAKE_FAILED", e))?;
+        return Ok(ProbeResult {
+            success: true,
+            tools,
+            message: crate::i18n::tr(
+                "WarpGrep MCP 握手及工具列表通过；检索调用会使用已验证的 Morph API Key。",
+                "WarpGrep MCP handshake and tool list passed; searches use the validated Morph API key.",
+            )
+            .into(),
+            checked_at: now(),
+        });
     }
     if engine.as_deref() == Some("serena") {
         if !state

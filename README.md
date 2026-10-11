@@ -62,6 +62,19 @@ Serena runs its native Streamable HTTP server at `http://127.0.0.1:<project-port
 
 Stopping Serena leaves CodeGraph and other projects running. Application exit, installer-requested shutdown, project removal/relocation, and **Stop all** also stop owned Serena process trees. Existing project autostart applies to CodeGraph; Serena is started explicitly. Binaries are not bundled: an installed Serena executable is required. Windows native HTTP and symbol queries were tested with Serena 1.7.0; macOS/Linux Serena runtime acceptance remains separate from cross-platform compilation.
 
+## WarpGrep (optional)
+
+[Morph WarpGrep](https://docs.morphllm.com/sdk/components/warp-grep) is a natural-language code search subagent: the `morph-warp-grep-v2.1` model plans several rounds of grep, listing and file reads, and returns the relevant files and line ranges. The desktop app implements the WarpGrep protocol natively in the project gateway, so no Node package or `npx` process is needed.
+
+1. Create an API key in the [Morph dashboard](https://morphllm.com/dashboard/api-keys).
+2. In **Settings → WarpGrep**, paste the key and click **Validate and save**. The key is saved only after one real WarpGrep model call succeeds (about 1K tokens); invalid keys, missing credit, rate limits and network failures are reported and nothing is saved. Settings only display a masked hint. **Remove** deletes the key and stops every running WarpGrep route.
+3. Select a project, choose **WarpGrep**, and click **Start instance**. Starting is refused until a validated key exists. No CodeGraph index is required.
+4. In **MCP configuration**, select WarpGrep (available once a key is validated) together with any other engines and apply. Clients receive a `warpgrep` entry pointing at `http://127.0.0.1:<shared-port>/warpgrep/<project-id>` with the project's bearer token.
+
+The route exposes exactly one read-only tool, `codebase_search` (`search_string`, optional `maxChars`, default 12,000). The model's grep/read/list/glob calls run locally and only inside the bound project root: absolute paths, `..` traversal and symlinks resolving outside the project are rejected, and common dependency/build directories, hidden files, binaries and files over 2 MB are skipped. Each search is limited to 6 turns and 150 seconds, with at most 4 concurrent searches per project. Search summaries are written to the project's Logs.
+
+The Morph API key is stored in the application database inside the owner-only application data directory; it is never written to project configuration files. **Code excerpts read during a search are sent to the Morph API** — confirm this is acceptable for each project before enabling it. Stopping WarpGrep, removing/relocating the project, **Stop all** and application exit unregister the route.
+
 ## Local development
 
 Prerequisites: Node.js 22+, Rust stable, and a local CodeGraph installation. Install the [Tauri native build prerequisites](https://v2.tauri.app/start/prerequisites/) for your system: MSVC, Windows SDK, and WebView2 on Windows; Xcode Command Line Tools on macOS; WebKitGTK 4.1, GTK, and AppIndicator dependencies on Linux. Each architecture is built on its native environment.

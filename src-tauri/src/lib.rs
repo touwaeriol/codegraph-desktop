@@ -8,6 +8,7 @@ mod models;
 mod persistence;
 mod runtime;
 mod serena;
+mod warpgrep;
 use models::*;
 use std::{
     collections::{HashMap, VecDeque},
@@ -27,6 +28,8 @@ pub struct AppState {
     http_host: tokio::sync::Mutex<Option<project_gateway::SharedGateway>>,
     serena_instances: tokio::sync::Mutex<HashMap<String, serena::Instance>>,
     serena_snapshots: Mutex<HashMap<String, serena::Snapshot>>,
+    warpgrep_instances: tokio::sync::Mutex<HashMap<String, warpgrep::Instance>>,
+    morph_key: project_gateway::warpgrep::ApiKey,
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     previews: Mutex<HashMap<String, configuration::ConfigPreview>>,
     tasks: Arc<lifecycle::TaskRegistry>,
@@ -269,6 +272,8 @@ fn shutdown(app: tauri::AppHandle) {
             }
         }
         if let Some(host) = state.http_host.lock().await.take() {
+            // Routes are owned by the host; drop WarpGrep handles before it stops.
+            std::mem::take(&mut *state.warpgrep_instances.lock().await);
             clean &= host.stop().await.is_ok();
         }
         let mut serena_stops = tokio::task::JoinSet::new();
@@ -338,6 +343,8 @@ pub fn run() {
             i18n::set(&persistence::language(&db).map_err(|e| std::io::Error::other(e.message))?);
             let migration_notes = http_migration::migrate(&mut db, &data)
                 .map_err(|e| std::io::Error::other(e.message))?;
+            let morph_key =
+                warpgrep::saved_key(&db).map_err(|e| std::io::Error::other(e.message))?;
             app.manage(AppState {
                 db: Mutex::new(db),
                 data,
@@ -345,6 +352,8 @@ pub fn run() {
                 gateways: Default::default(),
                 serena_instances: Default::default(),
                 serena_snapshots: Default::default(),
+                warpgrep_instances: Default::default(),
+                morph_key: Arc::new(std::sync::RwLock::new(morph_key)),
                 http_host: Default::default(),
                 locks: Default::default(),
                 previews: Default::default(),
@@ -405,6 +414,7 @@ pub fn run() {
                                 let mut ids: Vec<_> =
                                     state.gateways.lock().await.keys().cloned().collect();
                                 ids.extend(state.serena_instances.lock().await.keys().cloned());
+                                ids.extend(state.warpgrep_instances.lock().await.keys().cloned());
                                 ids.sort();
                                 ids.dedup();
                                 for id in ids {
@@ -412,6 +422,7 @@ pub fn run() {
                                     let _guard = lock.lock().await;
                                     let _ = runtime::stop(&app, &state, &id).await;
                                     let _ = serena::stop(&state, &id).await;
+                                    warpgrep::stop(&state, &id).await;
                                 }
                             });
                         }
@@ -484,6 +495,11 @@ pub fn run() {
             serena::get_serena_snapshot,
             serena::list_serena_snapshots,
             serena::serena_operation,
+            warpgrep::save_morph_api_key,
+            warpgrep::remove_morph_api_key,
+            warpgrep::warpgrep_operation,
+            warpgrep::get_warpgrep_snapshot,
+            warpgrep::list_warpgrep_snapshots,
             commands::list_projects,
             commands::add_project,
             commands::update_project,
