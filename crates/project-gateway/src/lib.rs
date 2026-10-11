@@ -66,9 +66,27 @@ async fn dispatch(State(routes): State<Routes>, request: Request) -> Response {
         _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
+/// Bind the fixed shared port. macOS can refuse to rebind while connections
+/// closed by the previous listener are still shutting down, even with
+/// SO_REUSEADDR, so a briefly busy port is retried before reporting a conflict.
+async fn bind_shared(port: u16) -> std::io::Result<TcpListener> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        match TcpListener::bind(("127.0.0.1", port)).await {
+            Err(e)
+                if port != 0
+                    && e.kind() == std::io::ErrorKind::AddrInUse
+                    && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(100)).await
+            }
+            result => return result,
+        }
+    }
+}
 impl SharedGateway {
     pub async fn start(port: u16) -> anyhow::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", port))
+        let listener = bind_shared(port)
             .await
             .context("PORT_BIND_FAILED: 无法绑定项目端口")?;
         let port = listener.local_addr()?.port();
