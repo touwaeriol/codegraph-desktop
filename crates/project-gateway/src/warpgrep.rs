@@ -367,10 +367,13 @@ impl Morph {
         }
         Ok(())
     }
+    /// `include_source` adds the code of every finished range; otherwise the
+    /// outcome lists only files and line ranges for the client to read itself.
     pub async fn search(
         &self,
         repo: &Repo,
         query: &str,
+        include_source: bool,
         log: &(dyn Fn(String) + Send + Sync),
     ) -> Result<SearchOutcome, MorphError> {
         let initial = {
@@ -423,9 +426,10 @@ impl Morph {
                 let repo = repo.clone();
                 let specs = parse_finish_files(&files);
                 let count = specs.len();
-                let text = tokio::task::spawn_blocking(move || repo.finish(&files, specs))
-                    .await
-                    .map_err(|e| MorphError::new(MorphErrorKind::Protocol, e.to_string()))?;
+                let text =
+                    tokio::task::spawn_blocking(move || repo.finish(&files, specs, include_source))
+                        .await
+                        .map_err(|e| MorphError::new(MorphErrorKind::Protocol, e.to_string()))?;
                 return Ok(SearchOutcome {
                     text,
                     turns: turn,
@@ -1007,7 +1011,7 @@ impl Repo {
             Ok(chunks) => chunks.join("\n...\n"),
         }
     }
-    fn finish(&self, raw: &str, files: Vec<(String, Lines)>) -> String {
+    fn finish(&self, raw: &str, files: Vec<(String, Lines)>, include_source: bool) -> String {
         if files.is_empty() {
             return if raw.trim().is_empty() {
                 "No relevant code found. Try rephrasing your search term.".into()
@@ -1041,6 +1045,9 @@ impl Repo {
                     .join(","),
             };
             index.push(format!("- {display}:{label}"));
+            if !include_source {
+                continue;
+            }
             let content = match lines {
                 Lines::All => self
                     .numbered(path, None)
@@ -1071,6 +1078,12 @@ impl Repo {
                 "<file path=\"{display}\"{attr}>\n{content}\n</file>\n"
             ));
         }
+        if !include_source {
+            return format!(
+                "WarpGrep searched this project.\n\n{}\n\nRead the listed files and line ranges for their code, or pass includeSource=true to include them here.",
+                index.join("\n")
+            );
+        }
         format!(
             "WarpGrep searched this project.\n\n{}\n\nHere is the content of files:\n\n{}",
             index.join("\n"),
@@ -1099,11 +1112,12 @@ fn read_text(path: &Path) -> Option<String> {
 fn tool() -> Tool {
     serde_json::from_value(json!({
         "name": TOOL_NAME,
-        "description": "Natural-language code search subagent (Morph WarpGrep) for this project. It runs several rounds of grep, file listing and reads inside the bound project, then returns relevant files, line ranges and their code. Use a targeted question such as \"Where are HTTP routes authenticated?\", not bare keywords or a symbol name. Results may be partial. File excerpts read during the search are sent to the Morph API.",
+        "description": "Natural-language code search subagent (Morph WarpGrep) for this project. It runs several rounds of grep, file listing and reads inside the bound project, then returns the relevant files and line ranges; set includeSource=true to also get their code. Use a targeted question such as \"Where are HTTP routes authenticated?\", not bare keywords or a symbol name. Results may be partial. File excerpts read during the search are sent to the Morph API.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "search_string": {"type":"string", "minLength":1, "maxLength":2000, "description":"What to find or understand, as a specific natural-language question."},
+                "includeSource": {"type":"boolean", "default":false, "description":"Also return the code of each listed range in <file> blocks. By default only file paths and line ranges are returned; read them with your file tools."},
                 "maxChars": {"type":"integer", "minimum":1000, "maximum":48000, "default":12000, "description":"Response budget in Unicode characters, including serialized result metadata and truncation notices."}
             },
             "required": ["search_string"],
@@ -1129,7 +1143,7 @@ impl ServerHandler for Server {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
-            instructions: Some("项目专属只读 WarpGrep 网关。codebase_search 以自然语言描述检索目标，由 Morph WarpGrep 在当前项目内多轮 grep/读取后返回相关文件与行段；检索中读取的代码片段会发送至 Morph API。精确符号查找请使用 CodeGraph 或 LSP。".into()),
+            instructions: Some("项目专属只读 WarpGrep 网关。codebase_search 以自然语言描述检索目标，由 Morph WarpGrep 在当前项目内多轮 grep/读取后返回相关文件与行段，includeSource=true 时附带对应代码；检索中读取的代码片段会发送至 Morph API。精确符号查找请使用 CodeGraph 或 LSP。".into()),
             ..Default::default()
         }
     }
@@ -1152,7 +1166,10 @@ impl ServerHandler for Server {
             return Err(invalid("Tool is not approved"));
         }
         let args = request.arguments.unwrap_or_default();
-        if args.keys().any(|k| k != "search_string" && k != "maxChars") {
+        if args
+            .keys()
+            .any(|k| !["search_string", "includeSource", "maxChars"].contains(&k.as_str()))
+        {
             return Err(invalid("Unknown argument"));
         }
         let query = args
@@ -1169,6 +1186,12 @@ impl ServerHandler for Server {
                 .filter(|v| (1000..=48000).contains(v))
                 .ok_or_else(|| invalid("maxChars must be an integer between 1000 and 48000"))?
                 as usize,
+        };
+        let include_source = match args.get("includeSource") {
+            None => false,
+            Some(v) => v
+                .as_bool()
+                .ok_or_else(|| invalid("includeSource must be a boolean"))?,
         };
         let Some(key) = self.key.read().unwrap().clone() else {
             return Ok(CallToolResult::error(vec![Content::text(
@@ -1195,7 +1218,7 @@ impl ServerHandler for Server {
                 log(format!("WarpGrep cancelled by the client after {:.1}s", started.elapsed().as_secs_f32()));
                 return Err(ErrorData::internal_error("请求已取消", None));
             }
-            outcome = tokio::time::timeout(SEARCH_TIMEOUT, morph.search(&self.repo, &query, &log)) => outcome,
+            outcome = tokio::time::timeout(SEARCH_TIMEOUT, morph.search(&self.repo, &query, include_source, &log)) => outcome,
         };
         let elapsed = started.elapsed().as_secs_f32();
         let result = match outcome {
@@ -1496,16 +1519,32 @@ mod tests {
             ]
         );
         let (_dir, repo) = fixture();
-        let text = repo.finish("", parse_finish_files("src/auth/login.rs:3-4 src/main.rs"));
+        let specs = "src/auth/login.rs:3-4 src/main.rs";
+        let text = repo.finish("", parse_finish_files(specs), true);
         assert!(text.contains("- src/auth/login.rs:3-4"), "{text}");
         assert!(text.contains("<file path=\"src/auth/login.rs\" lines=\"3-4\">\n// ... existing code, block starting at line 3 ...\npub fn login"), "{text}");
         assert!(
             text.contains("<file path=\"src/main.rs\">\nfn main() {"),
             "{text}"
         );
-        assert!(repo
-            .finish("nothing relevant", vec![])
-            .contains("nothing relevant"));
+        // Without source, only the index is returned, so no file body leaks in.
+        let index = repo.finish("", parse_finish_files(specs), false);
+        assert!(
+            index.contains("- src/auth/login.rs:3-4\n- src/main.rs:*"),
+            "{index}"
+        );
+        assert!(
+            !index.contains("<file")
+                && !index.contains("pub fn login")
+                && !index.contains("fn main"),
+            "{index}"
+        );
+        assert!(index.contains("includeSource=true"), "{index}");
+        for include_source in [false, true] {
+            assert!(repo
+                .finish("nothing relevant", vec![], include_source)
+                .contains("nothing relevant"));
+        }
     }
 
     #[test]
@@ -1596,7 +1635,7 @@ mod tests {
         morph.validate().await.unwrap();
         let lines = std::sync::Mutex::new(Vec::<String>::new());
         let outcome = morph
-            .search(&repo, "Where is login implemented?", &|line| {
+            .search(&repo, "Where is login implemented?", true, &|line| {
                 lines.lock().unwrap().push(line)
             })
             .await
@@ -1645,19 +1684,24 @@ mod tests {
         let morph = Morph::with_base("sk-test-1234567890", &base).unwrap();
         let lines = std::sync::Mutex::new(Vec::<String>::new());
         let outcome = morph
-            .search(&repo, "Where is login implemented?", &|line| {
+            .search(&repo, "Where is login implemented?", false, &|line| {
                 lines.lock().unwrap().push(line)
             })
             .await
             .unwrap();
         assert_eq!(outcome.files, 1);
+        assert!(
+            outcome.text.contains("- src/auth/login.rs:3-5") && !outcome.text.contains("<file"),
+            "{}",
+            outcome.text
+        );
         assert!(lines.lock().unwrap()[0]
             .starts_with("WarpGrep model call failed, retrying once: MORPH_UNAVAILABLE: HTTP 503"));
         // Two consecutive failures exhaust the single retry.
         let (base, _) = fake_morph_flaky(200, 2).await;
         let error = Morph::with_base("sk-test-1234567890", &base)
             .unwrap()
-            .search(&repo, "Where is login implemented?", &|_| ())
+            .search(&repo, "Where is login implemented?", false, &|_| ())
             .await
             .err()
             .unwrap();
@@ -1765,9 +1809,29 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(result.is_error, Some(true));
+        // Locations only by default; the code comes back only when asked for.
+        let text = serde_json::to_string(&result).unwrap();
+        assert!(
+            text.contains("src/auth/login.rs:3-5") && !text.contains("verify_token"),
+            "{text}"
+        );
+        let result = client
+            .call_tool(serde_json::from_value(json!({"name":TOOL_NAME,"arguments":{"search_string":"Where is login implemented?","includeSource":true}})).unwrap())
+            .await
+            .unwrap();
+        assert_ne!(result.is_error, Some(true));
         assert!(serde_json::to_string(&result)
             .unwrap()
             .contains("verify_token"));
+        assert!(client
+            .call_tool(
+                serde_json::from_value(
+                    json!({"name":TOOL_NAME,"arguments":{"search_string":"x","includeSource":"yes"}})
+                )
+                .unwrap()
+            )
+            .await
+            .is_err());
         *key.write().unwrap() = None;
         let result = client
             .call_tool(
@@ -1815,7 +1879,8 @@ mod tests {
         let client = crate::connect_http(route.endpoint(), &token).await.unwrap();
         let result = client
             .call_tool(serde_json::from_value(json!({"name":TOOL_NAME,"arguments":{
-                "search_string":"Where does the gateway check the bearer token and Host header of incoming HTTP requests?"
+                "search_string":"Where does the gateway check the bearer token and Host header of incoming HTTP requests?",
+                "includeSource":true
             }})).unwrap())
             .await
             .unwrap();
