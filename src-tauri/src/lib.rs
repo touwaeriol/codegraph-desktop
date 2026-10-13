@@ -3,6 +3,7 @@ mod configuration;
 mod discovery;
 mod http_migration;
 mod i18n;
+mod language_servers;
 mod lifecycle;
 mod models;
 mod persistence;

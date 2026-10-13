@@ -1,6 +1,7 @@
-use crate::{configuration::Target, models::*, persistence, AppState};
+use crate::{configuration::Target, language_servers, models::*, persistence, AppState};
 use rusqlite::OptionalExtension;
 use std::{
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
@@ -319,20 +320,20 @@ fn valid_tools(tools: &[String]) -> bool {
     tools.iter().any(|t| t == "find_symbol")
         && tools.iter().all(|t| LSP_TOOLS.contains(&t.as_str()))
 }
-fn server_command(entry: &Path, root: &Path, port: &str, context: &Path) -> Command {
-    let mut command = Command::new(entry);
-    // GUI launches may not have the user's uv tools directory on PATH.
-    let mut paths = entry
-        .parent()
-        .into_iter()
-        .map(Path::to_path_buf)
-        .collect::<Vec<_>>();
+/// PATH for Serena and the language servers it launches: servers installed by
+/// the app first, then Serena's own directory, since GUI launches may not have
+/// the user's uv tools directory on PATH.
+fn search_path(entry: &Path, servers: &Path) -> OsString {
+    let mut paths = vec![servers.to_path_buf()];
+    paths.extend(entry.parent().map(Path::to_path_buf));
     paths.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
-    if let Ok(path) = std::env::join_paths(paths) {
-        command.env("PATH", path);
-    }
+    std::env::join_paths(paths).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+}
+fn server_command(entry: &Path, root: &Path, port: &str, context: &Path, path: &OsStr) -> Command {
+    let mut command = Command::new(entry);
+    command.env("PATH", path);
     command.env("PYTHONIOENCODING", "utf-8");
     command
         .args([
@@ -362,7 +363,8 @@ fn server_command(entry: &Path, root: &Path, port: &str, context: &Path) -> Comm
         .stderr(Stdio::piped());
     command
 }
-async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()> {
+/// Project root and Serena's PATH for launching or repairing a project.
+fn environment(state: &AppState, id: &str) -> Result<(PathBuf, PathBuf, OsString)> {
     let project = state.project(id)?;
     let root = persistence::canonical(&project.canonical_path)?;
     let entry =
@@ -373,6 +375,12 @@ async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()>
             )
         })?;
     let entry = validate_entry(Path::new(&entry))?;
+    let path = search_path(&entry, &language_servers::dir(state));
+    Ok((root, entry, path))
+}
+async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()> {
+    let (root, entry, path) = environment(state, id)?;
+    language_servers::ensure(app, id, &root, &path, &language_servers::configured(&root)).await?;
     let target = binding(state, id)?;
     let address = target
         .endpoint
@@ -383,11 +391,12 @@ async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()>
         std::net::TcpListener::bind(address).map_err(|e| AppError::new("SERENA_PORT_BUSY", e))?;
     let port = reservation.local_addr()?.port().to_string();
     let context = lsp_context()?;
-    let mut command = server_command(&entry, &root, &port, context.path());
+    let mut command = server_command(&entry, &root, &port, context.path(), &path);
     drop(reservation);
     let (mut child, job) = project_gateway::spawn_owned(&mut command)
         .map_err(|e| AppError::new("SERENA_START_FAILED", e))?;
     let pid = child.id();
+    let failures = Failures::default();
     for stream in [
         child
             .stdout
@@ -403,11 +412,27 @@ async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()>
     {
         let app = app.clone();
         let id = id.to_string();
+        let failures = failures.clone();
         tauri::async_runtime::spawn(async move {
             let mut lines = BufReader::new(stream).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 app.state::<AppState>()
                     .log(&app, &id, "info", "serena", &line);
+                if let Some(failure) = language_server_failure(&line) {
+                    let first = {
+                        let mut list = failures.lock().unwrap();
+                        list.push(failure);
+                        list.len() == 1
+                    };
+                    if first {
+                        tauri::async_runtime::spawn(repair(
+                            app.clone(),
+                            id.clone(),
+                            pid,
+                            failures.clone(),
+                        ));
+                    }
+                }
             }
         });
     }
@@ -470,6 +495,85 @@ async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()>
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
 }
+/// Language servers Serena reported as failed to start, as (language, reason).
+type Failures = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+const LANGUAGE_SERVER_FAILURE: &str = "Error starting language server for language ";
+fn language_server_failure(line: &str) -> Option<(String, String)> {
+    let (_, rest) = line.split_once(LANGUAGE_SERVER_FAILURE)?;
+    let (language, reason) = rest.split_once(": ").unwrap_or((rest, ""));
+    Some((language.trim().into(), reason.trim().into()))
+}
+/// Serena keeps serving after a language server fails, with every LSP tool
+/// broken. Install what we can and restart; otherwise surface the failure.
+async fn repair(app: tauri::AppHandle, id: String, pid: Option<u32>, failures: Failures) {
+    let state = app.state::<AppState>();
+    // Waits for the start that spawned this instance to publish its snapshot.
+    let lock = state.operation_lock(&id);
+    let guard = lock.lock().await;
+    let current = state
+        .serena_instances
+        .lock()
+        .await
+        .get(&id)
+        .and_then(|i| i.child.id());
+    if current.is_none() || current != pid {
+        return;
+    }
+    let failures = failures.lock().unwrap().clone();
+    let languages = failures.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>();
+    let result = async {
+        let (root, _, path) = environment(&state, &id)?;
+        language_servers::ensure(&app, &id, &root, &path, &languages).await
+    }
+    .await;
+    let error = match result {
+        Ok(true) => {
+            drop(guard);
+            state.log(
+                &app,
+                &id,
+                "info",
+                "serena",
+                crate::i18n::tr(
+                    "已补齐缺失的语言服务器，正在重启 Serena",
+                    "Installed missing language servers. Restarting Serena",
+                ),
+            );
+            if let Err(error) = serena_operation(app.clone(), id.clone(), "restart".into()) {
+                state.log(&app, &id, "error", "serena", &error.message);
+            }
+            return;
+        }
+        Ok(false) => {
+            let details = failures
+                .iter()
+                .map(|(language, reason)| format!("{language}: {reason}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            AppError::new(
+                "SERENA_LSP_FAILED",
+                format!(
+                    "{}\n{details}",
+                    crate::i18n::tr(
+                        "Serena 已运行，但以下语言服务器未能启动，符号查询不可用：",
+                        "Serena is running, but these language servers failed to start, so symbol queries are unavailable:",
+                    )
+                ),
+            )
+        }
+        Err(error) => error,
+    };
+    let mut snapshot = state
+        .serena_snapshots
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .unwrap_or_default();
+    snapshot.error = Some(error.clone());
+    publish(&state, &id, snapshot);
+    state.log(&app, &id, "error", "serena", &error.message);
+}
 #[tauri::command]
 pub fn serena_operation(
     app: tauri::AppHandle,
@@ -522,6 +626,29 @@ pub fn serena_operation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recognizes_language_server_failures_in_serena_logs() {
+        let line = "ERROR 2026-10-07 17:52:22,629 [StartLS:go] serena.ls_manager:_start_language_server:127 - Error starting language server for language go: Found a Go version but gopls is not installed.";
+        assert_eq!(
+            language_server_failure(line),
+            Some((
+                "go".into(),
+                "Found a Go version but gopls is not installed.".into()
+            ))
+        );
+        assert_eq!(
+            language_server_failure("INFO Language server startup (language=go) starting ..."),
+            None
+        );
+    }
+    #[test]
+    fn installed_servers_come_first_on_serena_path() {
+        let entry = Path::new("/tools/serena/serena");
+        let servers = Path::new("/data/language-servers/bin");
+        let paths = std::env::split_paths(&search_path(entry, servers)).collect::<Vec<_>>();
+        assert_eq!(paths[0], servers);
+        assert_eq!(paths[1], Path::new("/tools/serena"));
+    }
     #[test]
     fn ports_survive_reopen_and_are_distinct_from_shared_gateway() {
         let dir = tempfile::tempdir().unwrap();
@@ -586,7 +713,8 @@ mod tests {
             let port = reserve.local_addr().unwrap().port().to_string();
             let endpoint = format!("http://127.0.0.1:{port}/mcp");
             let context = lsp_context().unwrap();
-            let mut command = server_command(&entry, &project, &port, context.path());
+            let path = search_path(&entry, &root.join("language-servers"));
+            let mut command = server_command(&entry, &project, &port, context.path(), &path);
             command
                 .env("SERENA_HOME", root.join("serena-home"))
                 .stdout(Stdio::null())
@@ -685,6 +813,7 @@ mod tests {
             Path::new("project"),
             "12345",
             context.path(),
+            OsStr::new("bin"),
         );
         let args: Vec<_> = command.as_std().get_args().collect();
         assert!(args

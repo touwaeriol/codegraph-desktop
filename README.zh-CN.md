@@ -55,7 +55,7 @@ CodeGraph 与 Serena 使用相同的工作台布局和页头操作。设置页�
 
 Serena 通过 `--context ide --project <绝对路径>` 单项目模式启动原生 HTTP，每个项目使用固定独立端口 `http://127.0.0.1:<端口>/mcp`，客户端直接连接。启动检查要求存在符号工具且没有切换项目工具。端口冲突报错，不自动切换。原生 Serena 不使用 CodeGraph 的令牌，仅供本机可信客户端使用；单项目模式不是操作系统沙箱。
 
-停止 Serena 不影响 CodeGraph 或其他项目。退出应用、安装器请求退出、删除/迁移项目和“全部停止”都会回收受管 Serena 进程树。引擎运行状态会跨重启保持：桌面退出时（包括安装器更新，更新后会自动重新打开应用）正在运行的 CodeGraph、Serena 与 WarpGrep 实例，下次启动时自动恢复，记录保存在应用数据目录的 `engine-resume.json`。手动停止或启动失败的引擎会从记录中移除；项目“自动启动”设置仍用于 CodeGraph。安装包不内置 Serena，需要自行安装其入口。已在 Windows 使用 Serena 1.7.0 验证原生 HTTP 和符号查询；macOS/Linux 的 Serena 运行验收与跨平台编译分别进行。
+停止 Serena 不影响 CodeGraph 或其他项目。退出应用、安装器请求退出、删除/迁移项目和“全部停止”都会回收受管 Serena 进程树。引擎运行状态会跨重启保持：桌面退出时（包括安装器更新，更新后会自动重新打开应用）正在运行的 CodeGraph、Serena 与 WarpGrep 实例，下次启动时自动恢复，记录保存在应用数据目录的 `engine-resume.json`。手动停止或启动失败的引擎会从记录中移除；项目“自动启动”设置仍用于 CodeGraph。安装包不内置 Serena，需要自行安装其入口。Serena 不会自行安装的语言服务器由桌面在启动前或检测到启动失败后自动安装（目前支持 Go 的 `gopls`），装入应用数据目录并置于 Serena 的 PATH 首位；未设置 `HTTPS_PROXY` 时使用系统代理。暂无安装方案的语言服务器会在 Serena 面板直接显示失败原因。已在 Windows 使用 Serena 1.7.0 验证原生 HTTP 和符号查询；macOS/Linux 的 Serena 运行验收与跨平台编译分别进行。
 
 ## WarpGrep（可选引擎）
 
