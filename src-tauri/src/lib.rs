@@ -6,6 +6,7 @@ mod i18n;
 mod lifecycle;
 mod models;
 mod persistence;
+mod resume;
 mod runtime;
 mod serena;
 mod warpgrep;
@@ -63,6 +64,19 @@ impl AppState {
     }
     fn project(&self, id: &str) -> Result<Project> {
         persistence::get(&self.db.lock().unwrap(), id)
+    }
+    /// Persists the outcome of a user-facing start/stop so the next launch
+    /// resumes the same engines. Shutdown-time cancellations are not user intent.
+    fn remember_engine(&self, id: &str, engine: &str, resume: bool) {
+        if self.quitting.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Err(error) = resume::set(&self.data, id, engine, resume) {
+            eprintln!(
+                "Cannot record {engine} resume state for {id}: {}",
+                error.message
+            );
+        }
     }
     fn operation_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.locks
@@ -302,6 +316,57 @@ fn install_shutdown_signals(app: tauri::AppHandle) {
         shutdown(app);
     });
 }
+/// Brings back the engines that were running when the desktop last exited,
+/// including exits forced by an installer update.
+async fn resume_engines(app: tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let projects = match persistence::list(&state.db.lock().unwrap()) {
+        Ok(projects) => projects,
+        Err(error) => {
+            eprintln!("Cannot list projects to resume: {}", error.message);
+            return;
+        }
+    };
+    for (id, engines) in resume::plan(&state.data, &projects) {
+        state.log(
+            &app,
+            &id,
+            "info",
+            "resume",
+            &format!(
+                "{} {}",
+                i18n::tr(
+                    "恢复上次运行的引擎：",
+                    "Resuming engines from the previous session:"
+                ),
+                engines.join(", ")
+            ),
+        );
+        for engine in engines {
+            match engine {
+                "codegraph" => {
+                    let _ = runtime::launch_operation(app.clone(), id.clone(), "start".into());
+                }
+                "serena" => {
+                    let _ = serena::serena_operation(app.clone(), id.clone(), "start".into());
+                }
+                _ => {
+                    let app = app.clone();
+                    let id = id.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = warpgrep::warpgrep_operation(
+                            app.clone(),
+                            app.state(),
+                            id,
+                            "start".into(),
+                        )
+                        .await;
+                    });
+                }
+            }
+        }
+    }
+}
 pub fn run() {
     let update_only = lifecycle::requests_update(&std::env::args().collect::<Vec<_>>());
     let mut context = tauri::generate_context!();
@@ -423,6 +488,9 @@ pub fn run() {
                                     let _ = runtime::stop(&app, &state, &id).await;
                                     let _ = serena::stop(&state, &id).await;
                                     warpgrep::stop(&state, &id).await;
+                                    for engine in resume::ENGINES {
+                                        state.remember_engine(&id, engine, false);
+                                    }
                                 }
                             });
                         }
@@ -464,14 +532,7 @@ pub fn run() {
                 }
             });
             let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let projects = commands::list_projects(handle.state()).unwrap_or_default();
-                for p in projects {
-                    if p.auto_start {
-                        let _ = runtime::launch_operation(handle.clone(), p.id, "start".into());
-                    }
-                }
-            });
+            tauri::async_runtime::spawn(resume_engines(handle));
             Ok(())
         })
         .on_window_event(|window, event| {

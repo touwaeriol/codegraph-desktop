@@ -508,6 +508,7 @@ pub fn serena_operation(
             _=async { while !cancel.load(Ordering::SeqCst) { tokio::time::sleep(Duration::from_millis(50)).await; } } => Err(AppError::new("TASK_CANCELLED","任务已取消")),
             result=work => result,
         };
+        state.remember_engine(&project_id,"serena",action!="stop" && result.is_ok());
         if let Err(error)=&result {
             let mut snapshot=state.serena_snapshots.lock().unwrap().get(&project_id).cloned().unwrap_or_default();
             snapshot.state="error".into(); snapshot.error=Some(error.clone()); publish(&state,&project_id,snapshot);

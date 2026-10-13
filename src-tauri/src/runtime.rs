@@ -396,6 +396,11 @@ pub fn launch_operation(app: tauri::AppHandle, id: String, kind: String) -> Resu
                 _ => index(&app, &state, &id, &kind, &cancel).await,
             }
         };
+        match kind.as_str() {
+            "start" | "restart" => state.remember_engine(&id, "codegraph", result.is_ok()),
+            "stop" => state.remember_engine(&id, "codegraph", false),
+            _ => (),
+        }
         if let Err(ref error) = result {
             let mut s = state.snapshot(&id);
             if ["start", "stop", "restart"].contains(&kind.as_str()) {

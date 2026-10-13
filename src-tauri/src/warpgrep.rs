@@ -139,6 +139,9 @@ pub async fn remove_morph_api_key(state: State<'_, AppState>) -> Result<Settings
         persistence::delete_setting(&tx, VALIDATED_SETTING)?;
         tx.commit()?;
     }
+    if let Err(error) = crate::resume::clear_engine(&state.data, "warpgrep") {
+        eprintln!("Cannot clear WarpGrep resume state: {}", error.message);
+    }
     *state.morph_key.write().unwrap() = None;
     commands::settings(&state)
 }
@@ -249,15 +252,18 @@ pub async fn warpgrep_operation(
     }
     state.project(&project_id)?;
     if action == "start" && is_running(&state, &project_id).await {
+        state.remember_engine(&project_id, "warpgrep", true);
         return get_warpgrep_snapshot(state, project_id).await;
     }
     stop(&state, &project_id).await;
     if action != "stop" {
         if let Err(error) = start(&app, &state, &project_id).await {
+            state.remember_engine(&project_id, "warpgrep", false);
             state.log(&app, &project_id, "error", "warpgrep", &error.message);
             return Err(error);
         }
     }
+    state.remember_engine(&project_id, "warpgrep", action != "stop");
     get_warpgrep_snapshot(state, project_id).await
 }
 #[tauri::command]

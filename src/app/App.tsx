@@ -8,7 +8,6 @@ import {
 } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-  Code2,
   Copy,
   Folder,
   FolderOpen,
@@ -81,6 +80,7 @@ import {
   EngineSettingsCard,
   Metric,
 } from "./EngineOverview";
+import { EngineIcon } from "@/components/EngineIcon";
 import packageInfo from "../../package.json";
 
 const indexNames = () => ({
@@ -597,17 +597,26 @@ export default function App() {
                 </div>
                 <div className="sidebar-engine-states">
                   <div>
-                    <span>CodeGraph</span>
+                    <span>
+                      <EngineIcon engine="codegraph" size={14} />
+                      CodeGraph
+                    </span>
                     <Status snapshot={snapshots[p.id]} />
                   </div>
                   <div>
-                    <span>Serena</span>
+                    <span>
+                      <EngineIcon engine="serena" size={14} />
+                      Serena
+                    </span>
                     <Status
                       snapshot={serena.snapshots[p.id] ?? { state: "stopped" }}
                     />
                   </div>
                   <div>
-                    <span>WarpGrep</span>
+                    <span>
+                      <EngineIcon engine="warpgrep" size={14} />
+                      WarpGrep
+                    </span>
                     <Status
                       snapshot={
                         warpgrep.snapshots[p.id] ?? { state: "stopped" }
@@ -918,7 +927,7 @@ export default function App() {
                       }}
                     >
                       <span className="engine-symbol">
-                        <GitBranch size={20} />
+                        <EngineIcon engine="codegraph" />
                       </span>
                       <span>
                         <strong>CodeGraph</strong>
@@ -934,7 +943,7 @@ export default function App() {
                       }}
                     >
                       <span className="engine-symbol">
-                        <Code2 size={20} />
+                        <EngineIcon engine="serena" />
                       </span>
                       <span>
                         <strong>Serena</strong>
@@ -950,7 +959,7 @@ export default function App() {
                       }}
                     >
                       <span className="engine-symbol">
-                        <Search size={20} />
+                        <EngineIcon engine="warpgrep" />
                       </span>
                       <span>
                         <strong>WarpGrep</strong>

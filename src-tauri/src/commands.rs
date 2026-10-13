@@ -81,6 +81,9 @@ pub async fn relocate_project(
     crate::runtime::stop(&app, &state, &project_id).await?;
     crate::serena::stop(&state, &project_id).await?;
     crate::warpgrep::stop(&state, &project_id).await;
+    for engine in crate::resume::ENGINES {
+        state.remember_engine(&project_id, engine, false);
+    }
     if p.canonical_path != canonical.to_string_lossy()
         && !p.previous_roots.contains(&p.canonical_path)
     {
@@ -111,6 +114,12 @@ pub async fn remove_project(
         .unwrap()
         .execute("DELETE FROM projects WHERE id=?1", [&project_id])?;
     state.snapshots.lock().unwrap().remove(&project_id);
+    if let Err(error) = crate::resume::forget_project(&state.data, &project_id) {
+        eprintln!(
+            "Cannot forget resume state for {project_id}: {}",
+            error.message
+        );
+    }
     Ok(())
 }
 #[tauri::command]

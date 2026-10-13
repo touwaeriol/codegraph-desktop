@@ -202,8 +202,17 @@ pre,
   gap: 4px;
 }
 .sidebar-engine-states > div > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 11px;
   color: #5d6876;
+}
+.engine-icon {
+  display: block;
+  flex-shrink: 0;
+  border-radius: 4px;
+  object-fit: contain;
 }
 .engine-overview > [data-slot="card"]:not(.col-span-full) {
   min-height: 360px;

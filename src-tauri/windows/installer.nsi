@@ -76,6 +76,8 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
+; 1 when this installer stopped a running copy of the application.
+Var RelaunchAfterUpdate
 ; Current user's Windows display language wins over an old installer preference.
 ; PRIMARYLANGID == LANG_CHINESE includes zh-CN, zh-TW, zh-HK, zh-SG and zh-MO.
 !macro MapInstallerLanguage uiLanguage
@@ -98,8 +100,11 @@ Var OldMainBinaryName
 !macroend
 ; Request orderly shutdown first. RM resources match the exact installation path,
 ; so same-name executables from another installation are never targeted.
-!macro GracefulShutdownForUpdate executablePath
+; Sets wasRunning to 1 when the installed application was running, so the
+; installer can start it again afterwards; the desktop then resumes its engines.
+!macro GracefulShutdownForUpdate executablePath wasRunning
   !define ShutdownID ${__LINE__}
+  StrCpy ${wasRunning} 0
   IfFileExists "${executablePath}" 0 graceful_done_${ShutdownID}
   !insertmacro RestartManager_StartSession $R7
   ${If} $R7 == ""
@@ -114,6 +119,7 @@ Var OldMainBinaryName
   StrCpy $2 0
   System::Call 'RSTRTMGR::RmGetList(i R7, *i .r1, *i .r2, p 0, *i .r3) i .r0'
   ${If} $0 = ${ERROR_MORE_DATA}
+    StrCpy ${wasRunning} 1
     DetailPrint "$(cgShutdownStopping)"
     Exec '$\"${executablePath}$\" --shutdown-for-update'
     StrCpy $R8 0
@@ -279,10 +285,19 @@ Var AppStartMenuFolder
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_FUNCTION RunMainBinary
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishPageShow
 !insertmacro MUI_PAGE_FINISH
 
 Function RunMainBinary
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
+FunctionEnd
+
+; The application was already started again after the update.
+Function FinishPageShow
+  ${If} $RelaunchAfterUpdate = 1
+    SendMessage $mui.FinishPage.Run ${BM_SETCHECK} 0 0
+    ShowWindow $mui.FinishPage.Run ${SW_HIDE}
+  ${EndIf}
 FunctionEnd
 
 ; Uninstaller Pages
@@ -352,6 +367,8 @@ LangString cgShutdownTimedOut ${LANG_ENGLISH} "Graceful shutdown timed out; chec
 LangString cgShutdownTimedOut ${LANG_SIMPCHINESE} "正常退出超时，将通过系统重启管理器处理当前安装目录中的应用。"
 LangString cgShutdownInspectFailed ${LANG_ENGLISH} "Cannot inspect the installed application; no files were changed."
 LangString cgShutdownInspectFailed ${LANG_SIMPCHINESE} "无法检查已安装的应用，未修改任何文件。"
+LangString cgRelaunching ${LANG_ENGLISH} "Starting the updated application; it resumes the services that were running..."
+LangString cgRelaunching ${LANG_SIMPCHINESE} "正在启动更新后的应用，并恢复更新前运行的服务……"
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode
   ${IfNot} ${Errors}
@@ -538,7 +555,7 @@ Section Install
   ; executables automatically, without another close-application prompt.
   Push $PassiveMode
   StrCpy $PassiveMode 1
-  !insertmacro GracefulShutdownForUpdate "$INSTDIR\${MAINBINARYNAME}.exe"
+  !insertmacro GracefulShutdownForUpdate "$INSTDIR\${MAINBINARYNAME}.exe" $RelaunchAfterUpdate
   !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
   ; MCP clients keep the connector alive independently of the desktop window.
   ; Register the exact installed path so other installations are not stopped.
@@ -635,6 +652,13 @@ Section Install
     !insertmacro NSIS_HOOK_POSTINSTALL
   !endif
 
+  ; The update stopped a running application: start the new version right away
+  ; so it resumes the engines that were running before the update.
+  ${If} $RelaunchAfterUpdate = 1
+    DetailPrint "$(cgRelaunching)"
+    nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
+  ${EndIf}
+
   ; Auto close this page for passive mode
   ${If} $PassiveMode = 1
     SetAutoClose true
@@ -648,6 +672,7 @@ Function .onInstSuccess
   ${OrIf} ${Silent}
     ${GetOptions} $CMDLINE "/R" $R0
     ${IfNot} ${Errors}
+    ${AndIf} $RelaunchAfterUpdate <> 1
       ${GetOptions} $CMDLINE "/ARGS" $R0
       nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "$R0"
     ${EndIf}
@@ -680,7 +705,8 @@ Section Uninstall
     !insertmacro NSIS_HOOK_PREUNINSTALL
   !endif
 
-  !insertmacro GracefulShutdownForUpdate "$INSTDIR\${MAINBINARYNAME}.exe"
+  ; Uninstalling never relaunches; the flag is only filled for the macro.
+  !insertmacro GracefulShutdownForUpdate "$INSTDIR\${MAINBINARYNAME}.exe" $RelaunchAfterUpdate
   !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
   !insertmacro CheckIfAppIsRunning "$INSTDIR\cg-mcp-connector.exe" "${PRODUCTNAME} MCP connector"
 

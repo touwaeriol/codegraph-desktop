@@ -37,17 +37,18 @@ Name "Isolated shutdown regression"
 OutFile "@@OUTFILE@@"
 RequestExecutionLevel user
 Var PassiveMode
+Var Relaunch
 LangString appRunning 1033 "Application running"
 LangString appRunningOkKill 1033 "Stop application?"
 LangString failedToKillApp 1033 "Stop failed"
 @@MACRO@@
 Section
   StrCpy $PassiveMode 1
-  !insertmacro GracefulShutdownForUpdate "@@APP@@"
+  !insertmacro GracefulShutdownForUpdate "@@APP@@" $Relaunch
   !insertmacro CheckIfAppIsRunning "@@APP@@" "Fixture app"
   !insertmacro CheckIfAppIsRunning "@@CONNECTOR@@" "Fixture connector"
   FileOpen $0 "@@MARKER@@" w
-  FileWrite $0 "payload-write-after-shutdown"
+  FileWrite $0 "payload-write-after-shutdown relaunch=$Relaunch"
   FileClose $0
 SectionEnd
 '@
@@ -67,12 +68,13 @@ try {
     if(-not $update.WaitForExit(90000)){throw 'Update fixture timed out.'}
     $update.Refresh();if($update.ExitCode -ne 0){throw 'Update fixture failed.'}
     foreach($marker in @('request-received','codegraph-stopped','app-exiting','payload-written')){if(-not(Test-Path (Join-Path $fixture $marker))){throw "Missing ordering evidence: $marker"}}
+    if((Get-Content (Join-Path $fixture 'payload-written') -Raw) -notmatch 'relaunch=1'){throw 'Running application was not flagged for relaunch.'}
     if(-not $main.WaitForExit(2000) -or -not $lockedConnector.WaitForExit(2000)){throw 'Installed processes remain.'}
     if(Get-Process -Id $workerId -ErrorAction SilentlyContinue){throw 'Managed worker remains.'}
     $other.Refresh();if($other.HasExited){throw 'Unrelated installation was stopped.'}
     $times=@('codegraph-stopped','app-exiting','payload-written') | ForEach-Object {(Get-Item (Join-Path $fixture $_)).LastWriteTimeUtc}
     if($times[0] -gt $times[1] -or $times[1] -gt $times[2]){throw 'Shutdown/write order violated.'}
-    $evidence=[ordered]@{checkedAt=[DateTime]::UtcNow.ToString('o');scope='Production NSIS graceful macro with isolated cooperative app/worker fixture';gracefulRequestDelivered=$true;workerStoppedBeforeAppExit=$true;applicationExitedBeforePayloadWrite=$true;legacyConnectorStopped=$true;unrelatedInstallationPreserved=$true}
+    $evidence=[ordered]@{checkedAt=[DateTime]::UtcNow.ToString('o');scope='Production NSIS graceful macro with isolated cooperative app/worker fixture';gracefulRequestDelivered=$true;workerStoppedBeforeAppExit=$true;applicationExitedBeforePayloadWrite=$true;legacyConnectorStopped=$true;unrelatedInstallationPreserved=$true;relaunchFlagged=$true}
     $evidence | ConvertTo-Json | Set-Content (Join-Path $PSScriptRoot 'graceful-upgrade-evidence.json')
     $evidence | ConvertTo-Json
 } finally {

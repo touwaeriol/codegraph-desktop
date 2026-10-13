@@ -5,12 +5,9 @@ import {
   CheckCircle2,
   Circle,
   Copy,
-  Code2,
-  GitBranch,
   Loader2,
   Play,
   RefreshCw,
-  Search,
   Square,
   TriangleAlert,
 } from "lucide-react";
@@ -28,6 +25,7 @@ import { t, useLanguage } from "@/lib/i18n";
 import type { RuntimeSnapshot } from "@/lib/types";
 import { toast } from "sonner";
 import { message } from "@/lib/ipc";
+import { EngineIcon } from "@/components/EngineIcon";
 
 type State = RuntimeSnapshot["state"];
 export function EngineStatus({ snapshot }: { snapshot?: { state: State } }) {
@@ -267,13 +265,15 @@ export function EngineSettingsCard({
       <CardHeader>
         <div className="flex items-center gap-3">
           <span className="engine-symbol">
-            {name === "Serena" ? (
-              <Code2 size={20} />
-            ) : name === "WarpGrep" ? (
-              <Search size={20} />
-            ) : (
-              <GitBranch size={20} />
-            )}
+            <EngineIcon
+              engine={
+                name === "Serena"
+                  ? "serena"
+                  : name === "WarpGrep"
+                    ? "warpgrep"
+                    : "codegraph"
+              }
+            />
           </span>
           <div className="min-w-0">
             <CardTitle>{name}</CardTitle>
