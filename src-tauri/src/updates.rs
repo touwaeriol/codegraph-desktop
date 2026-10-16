@@ -505,6 +505,16 @@ mod tests {
         })).unwrap().unwrap();
         update.install(std::fs::read(package).unwrap()).unwrap();
         assert!(std::fs::metadata(executable).unwrap().len() > 1024);
+        let validation = std::process::Command::new("codesign")
+            .args(["--verify", "--deep", "--strict", "--verbose=2"])
+            .arg(dir.path().join("CodeGraph Desktop.app"))
+            .output()
+            .unwrap();
+        assert!(
+            validation.status.success(),
+            "{}",
+            String::from_utf8_lossy(&validation.stderr)
+        );
         assert_eq!(
             std::fs::read(dir.path().join("user-settings")).unwrap(),
             b"preserve"

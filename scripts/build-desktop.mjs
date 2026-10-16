@@ -4,12 +4,15 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -77,6 +80,35 @@ function run(program, args, capture = false) {
 }
 function node(relative, ...args) {
   return run(process.execPath, [join(root, relative), ...args]);
+}
+function verifyMacApp(app) {
+  run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
+}
+function verifyMacPackages(bundleRoot, version, pkg) {
+  const directory = mkdtempSync(join(tmpdir(), "codegraph-macos-verify-"));
+  const mount = join(directory, "dmg");
+  mkdirSync(mount);
+  let mounted = false;
+  try {
+    run("hdiutil", [
+      "attach",
+      "-readonly",
+      "-nobrowse",
+      "-mountpoint",
+      mount,
+      join(bundleRoot, "dmg", `CodeGraph Desktop_${version}_aarch64.dmg`),
+    ]);
+    mounted = true;
+    verifyMacApp(join(mount, "CodeGraph Desktop.app"));
+    run("hdiutil", ["detach", mount]);
+    mounted = false;
+    const expanded = join(directory, "pkg");
+    run("pkgutil", ["--expand-full", pkg, expanded]);
+    verifyMacApp(join(expanded, "Payload", "CodeGraph Desktop.app"));
+  } finally {
+    if (mounted) run("hdiutil", ["detach", mount]);
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 function verifyVersions(tag) {
   const version = JSON.parse(readFileSync("package.json", "utf8")).version;
@@ -180,6 +212,8 @@ if (mode !== "VerifyVersion") {
       );
       chmodSync(join(scripts, "preinstall"), 0o755);
       const app = join(bundleRoot, "macos", "CodeGraph Desktop.app");
+      verifyMacApp(app);
+      const pkg = join(bundleRoot, `CodeGraph-Desktop_${version}_unsigned.pkg`);
       run("pkgbuild", [
         "--component",
         app,
@@ -191,8 +225,9 @@ if (mode !== "VerifyVersion") {
         version,
         "--scripts",
         scripts,
-        join(bundleRoot, `CodeGraph-Desktop_${version}_unsigned.pkg`),
+        pkg,
       ]);
+      verifyMacPackages(bundleRoot, version, pkg);
     }
     const output = join(
       root,

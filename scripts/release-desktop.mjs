@@ -103,7 +103,7 @@ if (process.argv[2] === "publish") {
       `CodeGraph Desktop ${tag}`,
       "--generate-notes",
       "--notes",
-      "Unsigned native packages. macOS packages are not notarized. Windows ARM64 app is native; its NSIS installer runs through x86 emulation. Checksums are supplied for all packages.",
+      "macOS 应用使用 ad-hoc 完整性签名，尚无 Apple Developer ID 签名与公证。Windows 和 macOS PKG 安装器未配置开发者证书签名。Windows ARM64 应用为原生构建，NSIS 安装器使用 x86 模拟运行。所有安装包均提供校验文件。",
       ...(version.includes("-") ? ["--prerelease"] : []),
     ]);
   manifest.notes =
