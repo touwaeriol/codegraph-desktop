@@ -152,6 +152,7 @@ pub fn binding(state: &AppState, id: &str) -> Result<Target> {
         name: "warpgrep".into(),
         endpoint: format!("http://127.0.0.1:{}/warpgrep/{id}", b.port),
         authorization: Some(b.authorization()),
+        stdio: None,
     })
 }
 pub fn require_key(state: &AppState) -> Result<()> {

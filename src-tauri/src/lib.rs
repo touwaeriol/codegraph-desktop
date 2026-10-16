@@ -7,6 +7,7 @@ mod language_servers;
 mod lifecycle;
 mod models;
 mod persistence;
+mod rea;
 mod resume;
 mod runtime;
 mod serena;
@@ -581,6 +582,7 @@ pub fn run() {
             commands::read_logs,
             commands::preview_client_config,
             commands::apply_client_config,
+            commands::set_project_mcp,
             commands::get_client_config_status,
             commands::test_project_mcp,
             commands::get_project_tasks,

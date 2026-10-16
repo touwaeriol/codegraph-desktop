@@ -3,12 +3,15 @@ use crate::persistence::HttpBinding;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, io::Write, path::Path};
-pub trait HttpTarget {
+pub trait ConfigTarget {
     fn name(&self) -> &str;
     fn endpoint(&self) -> String;
     fn auth(&self) -> Option<String>;
+    fn stdio(&self) -> Option<&StdioTarget> {
+        None
+    }
 }
-impl HttpTarget for HttpBinding {
+impl ConfigTarget for HttpBinding {
     fn name(&self) -> &str {
         "codegraph"
     }
@@ -23,8 +26,15 @@ pub struct Target {
     pub name: String,
     pub endpoint: String,
     pub authorization: Option<String>,
+    pub stdio: Option<StdioTarget>,
 }
-impl HttpTarget for Target {
+pub struct StdioTarget {
+    pub command: String,
+    pub args: Vec<String>,
+    pub startup_timeout_sec: i64,
+    pub tool_timeout_sec: i64,
+}
+impl ConfigTarget for Target {
     fn name(&self) -> &str {
         &self.name
     }
@@ -33,6 +43,9 @@ impl HttpTarget for Target {
     }
     fn auth(&self) -> Option<String> {
         self.authorization.clone()
+    }
+    fn stdio(&self) -> Option<&StdioTarget> {
+        self.stdio.as_ref()
     }
 }
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -158,7 +171,7 @@ fn merge(
     client: &str,
     name: &str,
     _id: &str,
-    binding: &(impl HttpTarget + ?Sized),
+    binding: &(impl ConfigTarget + ?Sized),
     remove: bool,
 ) -> Result<(String, bool, Option<String>)> {
     if client == "codex" {
@@ -186,14 +199,27 @@ fn merge(
                 doc["mcp_servers"] = toml_edit::Item::Table(toml_edit::Table::new());
             }
             let mut t = toml_edit::Table::new();
-            t["url"] = toml_edit::value(binding.endpoint());
-            if let Some(auth) = binding.auth() {
-                let mut headers = toml_edit::Table::new();
-                headers["Authorization"] = toml_edit::value(auth);
-                t["http_headers"] = toml_edit::Item::Table(headers);
+            if let Some(stdio) = binding.stdio() {
+                t["command"] = toml_edit::value(&stdio.command);
+                t["args"] = toml_edit::value(
+                    stdio
+                        .args
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<toml_edit::Array>(),
+                );
+                t["startup_timeout_sec"] = toml_edit::value(stdio.startup_timeout_sec);
+                t["tool_timeout_sec"] = toml_edit::value(stdio.tool_timeout_sec);
+            } else {
+                t["url"] = toml_edit::value(binding.endpoint());
+                if let Some(auth) = binding.auth() {
+                    let mut headers = toml_edit::Table::new();
+                    headers["Authorization"] = toml_edit::value(auth);
+                    t["http_headers"] = toml_edit::Item::Table(headers);
+                }
+                t["startup_timeout_sec"] = toml_edit::value(30);
+                t["tool_timeout_sec"] = toml_edit::value(120);
             }
-            t["startup_timeout_sec"] = toml_edit::value(30);
-            t["tool_timeout_sec"] = toml_edit::value(120);
             doc["mcp_servers"][name] = toml_edit::Item::Table(t);
         }
         Ok((doc.to_string(), conflict, old_hash))
@@ -224,11 +250,17 @@ fn merge(
             servers.remove(name);
         } else {
             servers.insert(name.into(), {
-                let mut value = serde_json::json!({"type":"http","url":binding.endpoint()});
-                if let Some(auth) = binding.auth() {
-                    value["headers"] = serde_json::json!({"Authorization":auth});
+                if let Some(stdio) = binding.stdio() {
+                    serde_json::json!({
+                        "type": "stdio", "command": stdio.command, "args": stdio.args
+                    })
+                } else {
+                    let mut value = serde_json::json!({"type":"http","url":binding.endpoint()});
+                    if let Some(auth) = binding.auth() {
+                        value["headers"] = serde_json::json!({"Authorization":auth});
+                    }
+                    value
                 }
-                value
             });
         }
         Ok((
@@ -291,16 +323,47 @@ pub fn preview(
     p: &Project,
     clients: &[String],
     action: &str,
-    binding: &impl HttpTarget,
+    binding: &impl ConfigTarget,
     managed: &HashMap<String, String>,
 ) -> Result<ConfigPreview> {
     preview_with_overrides(p, clients, action, binding, managed, &[])
+}
+/// 列表开关只自动修改仍归属本应用的条目，已有外部配置需通过高级预览处理。
+pub fn preview_toggle(
+    p: &Project,
+    client: &str,
+    enabled: bool,
+    binding: &impl ConfigTarget,
+    managed: &HashMap<String, String>,
+) -> Result<ConfigPreview> {
+    let preview = preview(
+        p,
+        &[client.into()],
+        if enabled { "install" } else { "remove" },
+        binding,
+        managed,
+    )?;
+    if enabled {
+        for file in &preview.files {
+            let existing = entry_fingerprint(&file.before, &file.client, binding.name())?;
+            if existing.is_some() && existing.as_ref() != managed.get(&file.client) {
+                return Err(AppError::new(
+                    "CONFIG_CHANGED",
+                    crate::i18n::tr(
+                        "已有同名 MCP 配置不受本应用管理或已被修改，请在高级配置中检查后更新",
+                        "An existing MCP entry is unmanaged or has been edited. Review it in advanced configuration before updating",
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(preview)
 }
 pub fn preview_with_overrides(
     p: &Project,
     clients: &[String],
     action: &str,
-    binding: &impl HttpTarget,
+    binding: &impl ConfigTarget,
     managed: &HashMap<String, String>,
     overrides: &[ConfigOverride],
 ) -> Result<ConfigPreview> {
@@ -310,7 +373,7 @@ fn preview_from(
     p: &Project,
     clients: &[String],
     action: &str,
-    binding: &dyn HttpTarget,
+    binding: &dyn ConfigTarget,
     managed: &HashMap<String, String>,
     overrides: &[ConfigOverride],
     inputs: Option<&HashMap<String, Option<Vec<u8>>>>,
@@ -689,7 +752,7 @@ fn apply_with(
             .collect(),
     })
 }
-pub fn status(p: &Project, binding: &impl HttpTarget) -> Vec<ConfigStatus> {
+pub fn status(p: &Project, binding: &impl ConfigTarget) -> Vec<ConfigStatus> {
     ["codex", "claude"]
         .iter()
         .map(|client| {
@@ -901,7 +964,7 @@ pub fn preview_restore(
     data: &Path,
     operation_id: &str,
     p: &Project,
-    binding: &impl HttpTarget,
+    binding: &impl ConfigTarget,
 ) -> Result<ConfigPreview> {
     preview_restore_many(data, operation_id, p, &[binding])
 }
@@ -909,7 +972,7 @@ pub fn preview_restore_many(
     data: &Path,
     operation_id: &str,
     p: &Project,
-    bindings: &[&dyn HttpTarget],
+    bindings: &[&dyn ConfigTarget],
 ) -> Result<ConfigPreview> {
     uuid::Uuid::parse_str(operation_id).map_err(|e| AppError::new("INVALID_OPERATION", e))?;
     let path = data
@@ -1323,7 +1386,7 @@ fn managed_fingerprint(
     client: &str,
     name: &str,
     _id: &str,
-    binding: &(impl HttpTarget + ?Sized),
+    binding: &(impl ConfigTarget + ?Sized),
 ) -> Result<Option<String>> {
     let content = content.trim_start_matches('\u{feff}');
     let endpoint = binding.endpoint();
@@ -1338,6 +1401,20 @@ fn managed_fingerprint(
                 .and_then(|v| v.get(name))
                 .and_then(|v| v.as_table_like())
                 .is_some_and(|server| {
+                    if let Some(stdio) = binding.stdio() {
+                        return server.get("command").and_then(|v| v.as_str())
+                            == Some(stdio.command.as_str())
+                            && server
+                                .get("args")
+                                .and_then(|v| v.as_array())
+                                .is_some_and(|args| {
+                                    args.iter()
+                                        .map(|v| v.as_str())
+                                        .eq(stdio.args.iter().map(|v| Some(v.as_str())))
+                                })
+                            && server.get("url").is_none()
+                            && server.get("http_headers").is_none();
+                    }
                     server.get("url").and_then(|v| v.as_str()) == Some(endpoint.as_str())
                         && server.get("command").is_none()
                         && server.get("args").is_none()
@@ -1355,6 +1432,16 @@ fn managed_fingerprint(
             doc.get("mcpServers")
                 .and_then(|v| v.get(name))
                 .is_some_and(|server| {
+                    if let Some(stdio) = binding.stdio() {
+                        return server
+                            .get("type")
+                            .is_none_or(|v| v.as_str() == Some("stdio"))
+                            && server.get("command").and_then(|v| v.as_str())
+                                == Some(stdio.command.as_str())
+                            && server.get("args") == Some(&serde_json::json!(stdio.args))
+                            && server.get("url").is_none()
+                            && server.get("headers").is_none();
+                    }
                     server.get("type").and_then(|v| v.as_str()) == Some("http")
                         && server.get("url").and_then(|v| v.as_str()) == Some(endpoint.as_str())
                         && server.get("command").is_none()
@@ -1379,6 +1466,70 @@ fn managed_fingerprint(
 mod override_tests {
     use super::*;
     #[test]
+    fn automatic_toggles_preserve_other_entries_and_reject_unmanaged_or_edited_entries() {
+        for client in ["codex", "claude"] {
+            let (dir, p, _) = fixture();
+            let data = tempfile::tempdir().unwrap();
+            let binding = crate::rea::binding();
+            let path = file_path(dir.path(), client);
+            let original = if client == "codex" {
+                "# keep\nmodel = 'existing'\n[mcp_servers.other]\ncommand = 'other'\n"
+            } else {
+                r#"{"custom":true,"mcpServers":{"other":{"command":"other"}}}"#
+            };
+            std::fs::write(&path, original).unwrap();
+            let enabled = preview_toggle(&p, client, true, &binding, &HashMap::new()).unwrap();
+            apply(&enabled, dir.path(), data.path()).unwrap();
+            let after = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(
+                entry_fingerprint(original, client, "other").unwrap(),
+                entry_fingerprint(&after, client, "other").unwrap(),
+            );
+            let managed =
+                HashMap::from([(client.into(), enabled.files[0].fingerprint.clone().unwrap())]);
+            for enabled in [true, false] {
+                assert_eq!(
+                    preview_toggle(&p, client, enabled, &binding, &HashMap::new())
+                        .err()
+                        .unwrap()
+                        .code,
+                    "CONFIG_CHANGED",
+                );
+            }
+            let again = preview_toggle(&p, client, true, &binding, &managed).unwrap();
+            assert_eq!(again.files[0].before, again.files[0].after);
+            let edited = after.replace("rea-agents@6.5.0", "rea-agents@latest");
+            std::fs::write(&path, &edited).unwrap();
+            for enabled in [true, false] {
+                assert_eq!(
+                    preview_toggle(&p, client, enabled, &binding, &managed)
+                        .err()
+                        .unwrap()
+                        .code,
+                    "CONFIG_CHANGED",
+                );
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
+            }
+            std::fs::write(&path, &after).unwrap();
+            let removed = preview_toggle(&p, client, false, &binding, &managed).unwrap();
+            apply(&removed, dir.path(), data.path()).unwrap();
+            assert_eq!(
+                status(&p, &binding)
+                    .iter()
+                    .find(|s| s.client == client)
+                    .unwrap()
+                    .state,
+                "missing"
+            );
+            assert_eq!(
+                entry_fingerprint(original, client, "other").unwrap(),
+                entry_fingerprint(&std::fs::read_to_string(path).unwrap(), client, "other")
+                    .unwrap(),
+            );
+        }
+    }
+
+    #[test]
     fn batch_engines_merge_overwrite_edit_and_restore_together() {
         for mode in [ConfigMode::Merge, ConfigMode::Overwrite, ConfigMode::Edit] {
             let (dir, p, cg) = fixture();
@@ -1388,12 +1539,15 @@ mod override_tests {
                     name: "codegraph".into(),
                     endpoint: cg.endpoint(),
                     authorization: Some(cg.authorization()),
+                    stdio: None,
                 },
                 Target {
                     name: "serena".into(),
                     endpoint: "http://127.0.0.1:58310/mcp".into(),
                     authorization: None,
+                    stdio: None,
                 },
+                crate::rea::binding(),
             ];
             let clients: Vec<String> = vec!["codex".into(), "claude".into()];
             let originals = [
@@ -1424,7 +1578,7 @@ mod override_tests {
             )
             .unwrap();
             assert_eq!(preview.files.len(), 2);
-            assert_eq!(preview.ownership.len(), 2);
+            assert_eq!(preview.ownership.len(), 3);
             for (f, before) in preview.files.iter().zip(originals) {
                 assert_eq!(f.before, before);
                 for binding in &bindings {
@@ -1452,14 +1606,14 @@ mod override_tests {
             assert!(written.files.iter().all(|f| f.status == "success"));
             let mut names = backup_services(data.path(), &written.operation_id).unwrap();
             names.sort();
-            assert_eq!(names, ["codegraph", "serena"]);
+            assert_eq!(names, ["codegraph", "rea", "serena"]);
             let refs = bindings
                 .iter()
-                .map(|b| b as &dyn HttpTarget)
+                .map(|b| b as &dyn ConfigTarget)
                 .collect::<Vec<_>>();
             let restore =
                 preview_restore_many(data.path(), &written.operation_id, &p, &refs).unwrap();
-            assert_eq!(restore.ownership.len(), 2);
+            assert_eq!(restore.ownership.len(), 3);
             assert!(restore
                 .ownership
                 .values()
@@ -1482,12 +1636,15 @@ mod override_tests {
                 name: "codegraph".into(),
                 endpoint: cg.endpoint(),
                 authorization: Some(cg.authorization()),
+                stdio: None,
             },
             Target {
                 name: "serena".into(),
                 endpoint: "http://127.0.0.1:58310/mcp".into(),
                 authorization: None,
+                stdio: None,
             },
+            crate::rea::binding(),
         ];
         let clients: Vec<String> = vec!["codex".into(), "claude".into()];
         let preview =
@@ -1511,7 +1668,7 @@ mod override_tests {
             .collect();
         let remove = preview_many(&p, &clients, "remove", &bindings, &managed, &[]).unwrap();
         for f in &remove.files {
-            for name in ["codegraph", "serena"] {
+            for name in ["codegraph", "serena", "rea"] {
                 assert!(entry_fingerprint(&f.after, &f.client, name)
                     .unwrap()
                     .is_none());
@@ -1521,7 +1678,7 @@ mod override_tests {
         let removed = apply(&remove, dir.path(), data.path()).unwrap();
         let refs = bindings
             .iter()
-            .map(|b| b as &dyn HttpTarget)
+            .map(|b| b as &dyn ConfigTarget)
             .collect::<Vec<_>>();
         let restore = preview_restore_many(data.path(), &removed.operation_id, &p, &refs).unwrap();
         assert!(restore
@@ -1580,6 +1737,82 @@ mod override_tests {
             .all(|files| files.values().all(Option::is_none)));
     }
     #[test]
+    fn rea_stdio_configuration_tracks_commands_and_preserves_http_engines() {
+        let (dir, p, codegraph) = fixture();
+        let data = tempfile::tempdir().unwrap();
+        let clients: Vec<String> = vec!["codex".into(), "claude".into()];
+        let cg = preview(&p, &clients, "install", &codegraph, &HashMap::new()).unwrap();
+        apply(&cg, dir.path(), data.path()).unwrap();
+        let rea = crate::rea::binding();
+        let change = preview(&p, &clients, "install", &rea, &HashMap::new()).unwrap();
+        let expected = rea.stdio.as_ref().unwrap();
+        for file in &change.files {
+            validate_content(&file.after, &file.client).unwrap();
+            assert_eq!(
+                entry_fingerprint(&file.before, &file.client, "codegraph").unwrap(),
+                entry_fingerprint(&file.after, &file.client, "codegraph").unwrap(),
+            );
+            if file.client == "codex" {
+                let doc = file.after.parse::<toml_edit::DocumentMut>().unwrap();
+                let server = &doc["mcp_servers"]["rea"];
+                assert_eq!(server["command"].as_str(), Some(expected.command.as_str()));
+                assert_eq!(server["startup_timeout_sec"].as_integer(), Some(120));
+                assert_eq!(server["tool_timeout_sec"].as_integer(), Some(600));
+                assert!(server.get("url").is_none());
+                assert!(server.get("http_headers").is_none());
+            } else {
+                let doc: serde_json::Value = serde_json::from_str(&file.after).unwrap();
+                let server = &doc["mcpServers"]["rea"];
+                assert_eq!(server["type"], "stdio");
+                assert_eq!(server["command"], expected.command);
+                assert_eq!(server["args"], serde_json::json!(expected.args));
+                assert!(server.get("url").is_none());
+                assert!(server.get("headers").is_none());
+            }
+        }
+        apply(&change, dir.path(), data.path()).unwrap();
+        assert!(status(&p, &rea).iter().all(|s| s.state == "configured"));
+        let owned = change
+            .files
+            .iter()
+            .map(|file| (file.client.clone(), file.fingerprint.clone().unwrap()))
+            .collect();
+        let removal = preview(&p, &clients, "remove", &rea, &owned).unwrap();
+        for file in &removal.files {
+            assert!(entry_fingerprint(&file.after, &file.client, "rea")
+                .unwrap()
+                .is_none());
+            assert!(entry_fingerprint(&file.after, &file.client, "codegraph")
+                .unwrap()
+                .is_some());
+        }
+        for file in &change.files {
+            for changed in [
+                file.after.replace("rea-agents@6.5.0", "rea-agents@latest"),
+                file.after.replace("\"npx\"", "\"other-command\""),
+            ] {
+                assert!(
+                    managed_fingerprint(&changed, &file.client, "rea", &p.id, &rea)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            std::fs::write(
+                &file.path,
+                file.after.replace("rea-agents@6.5.0", "rea-agents@latest"),
+            )
+            .unwrap();
+        }
+        assert!(status(&p, &rea).iter().all(|s| s.state == "repair"));
+        assert_eq!(
+            preview(&p, &clients, "remove", &rea, &owned)
+                .err()
+                .unwrap()
+                .code,
+            "CONFIG_CHANGED"
+        );
+    }
+    #[test]
     fn serena_configuration_preserves_codegraph_and_tracks_separate_ownership() {
         let (_dir, p, codegraph) = fixture();
         let data = tempfile::tempdir().unwrap();
@@ -1590,6 +1823,7 @@ mod override_tests {
             name: "serena".into(),
             endpoint: "http://127.0.0.1:58310/mcp".into(),
             authorization: None,
+            stdio: None,
         };
         let change = preview(&p, &clients, "install", &serena, &HashMap::new()).unwrap();
         let owned: HashMap<_, _> = change
@@ -1660,7 +1894,7 @@ mod override_tests {
     }
     fn overridden(
         p: &Project,
-        binding: &impl HttpTarget,
+        binding: &impl ConfigTarget,
         client: &str,
         mode: ConfigMode,
         content: Option<String>,

@@ -70,6 +70,7 @@ import type {
   TaskProgress,
 } from "@/lib/types";
 import { SerenaPanel, SerenaSettings, useSerena } from "./Serena";
+import { ReaPanel, ReaSettings } from "./Rea";
 import { WarpGrepPanel, WarpGrepSettings, useWarpGrep } from "./WarpGrep";
 import { ProjectTools } from "./ProjectTools";
 import {
@@ -78,6 +79,7 @@ import {
   EngineRuntimeCard,
   EngineConnectionCard,
   EngineSettingsCard,
+  EngineMarker,
   Metric,
 } from "./EngineOverview";
 import { EngineIcon } from "@/components/EngineIcon";
@@ -165,7 +167,9 @@ export default function App() {
             run: (action: "start" | "stop" | "restart") =>
               void warpgrep.run(action),
             cancel: () => undefined,
-            mode: morphKeyHint ? t("共享网关路由") : t("需先验证 Morph API Key"),
+            mode: morphKeyHint
+              ? t("共享网关路由")
+              : t("需先验证 Morph API Key"),
             error: warpgrep.error || warpgrep.snapshot.error?.message || "",
           }
         : null;
@@ -591,38 +595,29 @@ export default function App() {
                   setError("");
                 }}
               >
-                <div className="flex gap-2 items-center font-medium mb-2">
-                  <Folder size={16} />
-                  <span className="truncate">{p.name}</span>
-                </div>
-                <div className="sidebar-engine-states">
-                  <div>
-                    <span>
-                      <EngineIcon engine="codegraph" size={14} />
-                      CodeGraph
-                    </span>
-                    <Status snapshot={snapshots[p.id]} />
-                  </div>
-                  <div>
-                    <span>
-                      <EngineIcon engine="serena" size={14} />
-                      Serena
-                    </span>
-                    <Status
-                      snapshot={serena.snapshots[p.id] ?? { state: "stopped" }}
+                <div className="sidebar-project-heading">
+                  <Folder size={14} className="shrink-0" />
+                  <span
+                    className="truncate font-medium flex-1 min-w-0"
+                    title={p.name}
+                  >
+                    {p.name}
+                  </span>
+                  <span className="sidebar-engine-states">
+                    <EngineMarker
+                      engine="codegraph"
+                      state={snapshots[p.id]?.state}
                     />
-                  </div>
-                  <div>
-                    <span>
-                      <EngineIcon engine="warpgrep" size={14} />
-                      WarpGrep
-                    </span>
-                    <Status
-                      snapshot={
-                        warpgrep.snapshots[p.id] ?? { state: "stopped" }
-                      }
+                    <EngineMarker
+                      engine="serena"
+                      state={serena.snapshots[p.id]?.state ?? "stopped"}
                     />
-                  </div>
+                    <EngineMarker
+                      engine="warpgrep"
+                      state={warpgrep.snapshots[p.id]?.state ?? "stopped"}
+                    />
+                    <EngineMarker engine="rea" />
+                  </span>
                 </div>
                 <div
                   className="mono text-[11px] text-muted-foreground truncate mt-2"
@@ -830,59 +825,77 @@ export default function App() {
                         </Button>
                       </div>
                     </div>
-                    <EngineActions
-                      state={
-                        auxiliary ? auxiliary.snapshot.state : snapshot?.state
-                      }
-                      busy={auxiliary ? auxiliary.busy : busy}
-                      disabled={
-                        auxiliary ? auxiliary.disabled : !environment?.available
-                      }
-                      startLabel={
-                        engine === "codegraph" &&
-                        snapshot?.indexState === "missing"
-                          ? t("初始化索引")
-                          : undefined
-                      }
-                      onStart={() => {
-                        if (auxiliary) auxiliary.run("start");
-                        else if (snapshot?.indexState === "missing")
-                          void indexing("init");
-                        else void runtime("start");
-                      }}
-                      onStop={() => {
-                        if (auxiliary) auxiliary.run("stop");
-                        else void runtime("stop");
-                      }}
-                      onRestart={() => {
-                        if (auxiliary) auxiliary.run("restart");
-                        else void runtime("restart");
-                      }}
-                      onCancel={() => {
-                        if (auxiliary) auxiliary.cancel();
-                        else void cancelStartup();
-                      }}
-                    />
+                    {engine === "rea" ? (
+                      <Button onClick={() => changeTab("config")}>
+                        {t("配置客户端")}
+                      </Button>
+                    ) : (
+                      <EngineActions
+                        state={
+                          auxiliary ? auxiliary.snapshot.state : snapshot?.state
+                        }
+                        busy={auxiliary ? auxiliary.busy : busy}
+                        disabled={
+                          auxiliary
+                            ? auxiliary.disabled
+                            : !environment?.available
+                        }
+                        startLabel={
+                          engine === "codegraph" &&
+                          snapshot?.indexState === "missing"
+                            ? t("初始化索引")
+                            : undefined
+                        }
+                        onStart={() => {
+                          if (auxiliary) auxiliary.run("start");
+                          else if (snapshot?.indexState === "missing")
+                            void indexing("init");
+                          else void runtime("start");
+                        }}
+                        onStop={() => {
+                          if (auxiliary) auxiliary.run("stop");
+                          else void runtime("stop");
+                        }}
+                        onRestart={() => {
+                          if (auxiliary) auxiliary.run("restart");
+                          else void runtime("restart");
+                        }}
+                        onCancel={() => {
+                          if (auxiliary) auxiliary.cancel();
+                          else void cancelStartup();
+                        }}
+                      />
+                    )}
                   </div>
                   <div className="engine-header-status">
-                    <span>{auxiliary ? auxiliary.name : "CodeGraph"}</span>
-                    <Status
-                      snapshot={auxiliary ? auxiliary.snapshot : snapshot}
-                    />
-                    <span>
-                      {auxiliary
-                        ? auxiliary.mode
-                        : snapshot
-                          ? indexNames()[snapshot.indexState]
-                          : t("索引尚未获取")}
-                    </span>
-                    <span>
-                      {auxiliary
-                        ? t("{0} 个工具", {
-                            0: auxiliary.snapshot.tools.length,
-                          })
-                        : t("{0} 个会话", { 0: snapshot?.sessions ?? 0 })}
-                    </span>
+                    {engine === "rea" ? (
+                      <>
+                        <span>REA</span>
+                        <Badge variant="secondary">{t("由客户端启动")}</Badge>
+                        <span>stdio</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>{auxiliary ? auxiliary.name : "CodeGraph"}</span>
+                        <Status
+                          snapshot={auxiliary ? auxiliary.snapshot : snapshot}
+                        />
+                        <span>
+                          {auxiliary
+                            ? auxiliary.mode
+                            : snapshot
+                              ? indexNames()[snapshot.indexState]
+                              : t("索引尚未获取")}
+                        </span>
+                        <span>
+                          {auxiliary
+                            ? t("{0} 个工具", {
+                                0: auxiliary.snapshot.tools.length,
+                              })
+                            : t("{0} 个会话", { 0: snapshot?.sessions ?? 0 })}
+                        </span>
+                      </>
+                    )}
                   </div>
                 </header>
                 <div className="content space-y-4">
@@ -967,6 +980,22 @@ export default function App() {
                       </span>
                       <Status snapshot={warpgrep.snapshot} />
                     </button>
+                    <button
+                      aria-pressed={engine === "rea"}
+                      onClick={() => {
+                        setEngine("rea");
+                        changeTab("overview");
+                      }}
+                    >
+                      <span className="engine-symbol">
+                        <EngineIcon engine="rea" />
+                      </span>
+                      <span>
+                        <strong>REA</strong>
+                        <small>{t("应用与二进制逆向分析")}</small>
+                      </span>
+                      <Badge variant="secondary">{t("由客户端启动")}</Badge>
+                    </button>
                   </div>
                   <Tabs value={tab} onValueChange={changeTab}>
                     <TabsList className="mb-5">
@@ -975,7 +1004,12 @@ export default function App() {
                       <TabsTrigger value="logs">{t("运行日志")}</TabsTrigger>
                     </TabsList>
                     <TabsContent value="overview">
-                      {engine === "warpgrep" ? (
+                      {engine === "rea" ? (
+                        <ReaPanel
+                          settings={openSettings}
+                          configure={() => changeTab("config")}
+                        />
+                      ) : engine === "warpgrep" ? (
                         <WarpGrepPanel
                           runtime={warpgrep}
                           keyHint={morphKeyHint}
@@ -1555,6 +1589,7 @@ function SettingsForm({
           </EngineSettingsCard>
           <SerenaSettings entry={settings?.serenaEntry} />
           <WarpGrepSettings settings={settings} onChange={refresh} />
+          <ReaSettings />
         </div>
       </section>
       <section aria-labelledby="preferences-title">

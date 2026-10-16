@@ -38,6 +38,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { LineDiff } from "@/components/LineDiff";
 import { Elapsed } from "@/components/Elapsed";
 import { call, message, subscribe } from "@/lib/ipc";
+import { McpList, ENGINES, engineLabel, type McpChange } from "./McpList";
 import type {
   Client,
   Engine,
@@ -76,10 +77,6 @@ function statusLabel(value: string) {
   };
   return labels[value] ?? value;
 }
-const ENGINES = ["codegraph", "serena", "warpgrep"] as const;
-const engineLabel = (value: Engine) =>
-  ({ codegraph: "CodeGraph", serena: "Serena", warpgrep: "WarpGrep" })[value];
-
 export function ProjectTools({
   engine = "codegraph",
   serena,
@@ -101,18 +98,24 @@ export function ProjectTools({
 }) {
   const language = useLanguage();
   const [engines, setEngines] = useState<Engine[]>(() =>
-    morphReady ? [...ENGINES] : ["codegraph", "serena"],
+    engine === "rea"
+      ? ["rea"]
+      : morphReady
+        ? ["codegraph", "serena", "warpgrep"]
+        : ["codegraph", "serena"],
   );
-  const running =
-    engines.length > 0 &&
-    engines.every(
-      (value) =>
-        ({
-          codegraph: snapshot?.state,
-          serena: serena?.state,
-          warpgrep: warpgrep?.state,
-        })[value] === "running",
-    );
+  const engineCanProbe = (value: Engine) =>
+    value === "rea" ||
+    {
+      codegraph: snapshot?.state,
+      serena: serena?.state,
+      warpgrep: warpgrep?.state,
+    }[value] === "running";
+  const canProbe = engines.length > 0 && engines.every(engineCanProbe);
+  const [pendingConfig, setPendingConfig] = useState<McpChange | null>(null);
+  const [failedConfig, setFailedConfig] = useState<McpChange | null>(null);
+  const operationBusy = useRef(false);
+  const statusRequest = useRef(0);
   useEffect(() => {
     setError("");
     setProbe(null);
@@ -178,8 +181,20 @@ export function ProjectTools({
     overscan: 12,
   });
   async function loadStatus() {
-    setStatuses(await fetchStatuses());
-    setBackups(await call("list_config_backups", { projectId: project.id }));
+    const request = ++statusRequest.current;
+    try {
+      const [configs, savedBackups] = await Promise.all([
+        fetchStatuses(),
+        call<typeof backups>("list_config_backups", { projectId: project.id }),
+      ]);
+      if (request === statusRequest.current) {
+        setStatuses(configs);
+        setBackups(savedBackups);
+      }
+    } catch (e) {
+      if (request === statusRequest.current) setStatuses([]);
+      throw e;
+    }
   }
   async function fetchStatuses() {
     return (
@@ -198,8 +213,9 @@ export function ProjectTools({
   useEffect(() => {
     let active = true;
     const cleanups: (() => void)[] = [];
-    const load = () =>
-      Promise.all([
+    const load = () => {
+      const request = ++statusRequest.current;
+      return Promise.all([
         call<LogEntry[]>("read_logs", { projectId: project.id, limit: 2000 }),
         fetchStatuses(),
         call<TaskProgress[]>("get_project_tasks", { projectId: project.id }),
@@ -223,8 +239,10 @@ export function ProjectTools({
                 ),
               ].slice(-2000),
             );
-            setStatuses(configs);
-            setBackups(savedBackups);
+            if (request === statusRequest.current) {
+              setStatuses(configs);
+              setBackups(savedBackups);
+            }
             setTasks((old) => {
               const merged = new Map(
                 old.map((task) => [task.operationId, task]),
@@ -243,6 +261,7 @@ export function ProjectTools({
         .catch((e) => {
           if (active) setError(message(e));
         });
+    };
     void Promise.all([
       subscribe<LogEntry>("project-log", (entry) => {
         if (entry.projectId === project.id)
@@ -277,10 +296,20 @@ export function ProjectTools({
     };
   }, [project.id, refresh, language, engine]);
   useEffect(() => {
+    if (tab !== "config") return;
+    const timer = setInterval(() => {
+      if (!operationBusy.current)
+        void loadStatus().catch((e) => setError(message(e)));
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [project.id, tab]);
+  useEffect(() => {
     if (follow && tab === "logs" && filtered.length)
       virtualizer.scrollToIndex(filtered.length - 1, { align: "end" });
   }, [filtered.length, follow, tab]);
   async function execute(action: () => Promise<void>) {
+    if (operationBusy.current) return;
+    operationBusy.current = true;
     setBusy(true);
     setError("");
     try {
@@ -288,8 +317,62 @@ export function ProjectTools({
     } catch (e) {
       setError(message(e));
     } finally {
+      operationBusy.current = false;
       setBusy(false);
     }
+  }
+  async function toggleMcp(change: McpChange) {
+    await execute(async () => {
+      setPendingConfig(change);
+      setFailedConfig(null);
+      setProbe(null);
+      ++statusRequest.current;
+      try {
+        const applied = await call<ConfigResult>("set_project_mcp", {
+          projectId: project.id,
+          ...change,
+        });
+        setResult(applied);
+        if (
+          !applied.files.every((file) =>
+            ["success", "unchanged"].includes(file.status),
+          )
+        ) {
+          throw new Error(t("部分配置未能完成，请查看逐文件结果和备份位置。"));
+        }
+      } catch (e) {
+        setFailedConfig(change);
+        throw e;
+      } finally {
+        try {
+          await loadStatus();
+        } finally {
+          setPendingConfig(null);
+        }
+      }
+    });
+  }
+  async function probeEngines(values: Engine[]) {
+    await execute(async () => {
+      setProbe(null);
+      const results = await Promise.all(
+        values.map(async (engine) => ({
+          engine,
+          ...(await call<NonNullable<typeof probe>>("test_project_mcp", {
+            projectId: project.id,
+            engine,
+          })),
+        })),
+      );
+      setProbe({
+        success: results.every((r) => r.success),
+        tools: results.flatMap((r) =>
+          r.tools.map((tool) => `${r.engine}: ${tool}`),
+        ),
+        message: results.map((r) => `${r.engine}: ${r.message}`).join("\n"),
+        checkedAt: new Date().toISOString(),
+      });
+    });
   }
   async function configPreview(action: "install" | "remove") {
     await beginPreview({
@@ -497,39 +580,50 @@ export function ProjectTools({
           <div>
             <h2 className="text-lg font-semibold">{t("MCP 配置")}</h2>
             <p className="text-sm text-muted-foreground mt-1">
-              {t("客户端将共用")}
-              {project.name}
-              {t("的受管实例。")}
+              {t("勾选即保存，配置状态与项目文件保持同步。")}
             </p>
           </div>
+          <Button
+            data-testid="refresh-mcp-config"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void execute(loadStatus)}
+          >
+            <RefreshCw />
+            {t("刷新状态")}
+          </Button>
+        </div>
+        <McpList
+          statuses={statuses}
+          busy={busy}
+          pending={pendingConfig}
+          failed={failedConfig}
+          morphReady={morphReady}
+          canProbe={engineCanProbe}
+          toggle={(change) => void toggleMcp(change)}
+          probe={(value) => void probeEngines([value])}
+          review={(value, client) =>
+            void beginPreview({
+              kind: "client",
+              action: "install",
+              engines: [value],
+              clients: [client],
+            })
+          }
+        />
+        <details className="space-y-4" data-testid="advanced-mcp-config">
+          <summary className="cursor-pointer text-sm text-muted-foreground">
+            {t("高级配置")}
+          </summary>
+          <p className="text-xs text-muted-foreground">
+            {t("仅在修复冲突或自定义配置时使用预览和编辑。")}
+          </p>
           <div className="toolbar">
             <Button
               variant="outline"
-              disabled={busy || !running}
-              title={!running ? t("需先启动实例") : undefined}
-              onClick={() =>
-                void execute(async () => {
-                  const results = await Promise.all(
-                    engines.map(async (engine) => ({
-                      engine,
-                      ...(await call<NonNullable<typeof probe>>(
-                        "test_project_mcp",
-                        { projectId: project.id, engine },
-                      )),
-                    })),
-                  );
-                  setProbe({
-                    success: results.every((r) => r.success),
-                    tools: results.flatMap((r) =>
-                      r.tools.map((tool) => `${r.engine}: ${tool}`),
-                    ),
-                    message: results
-                      .map((r) => `${r.engine}: ${r.message}`)
-                      .join("\n"),
-                    checkedAt: new Date().toISOString(),
-                  });
-                })
-              }
+              disabled={busy || !canProbe}
+              title={!canProbe ? t("需先启动实例") : undefined}
+              onClick={() => void probeEngines(engines)}
             >
               <ActivityIcon />
               {t("测试连接")}
@@ -541,202 +635,231 @@ export function ProjectTools({
               {t("预览并配置")}
             </Button>
           </div>
-        </div>
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("选择 MCP")}</CardTitle>
-            <CardDescription>
-              {t("可同时配置多个 MCP，一次预览并写入所选客户端的项目配置。")}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-6">
-            {ENGINES.map((value) => (
-              <label
-                key={value}
-                className="flex items-center gap-2"
-                title={
-                  value === "warpgrep" && !morphReady
-                    ? t("需先验证 Morph API Key")
-                    : undefined
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={engines.includes(value)}
-                  disabled={
-                    busy ||
-                    (value === "warpgrep" &&
-                      !morphReady &&
-                      !engines.includes(value))
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("选择 MCP")}</CardTitle>
+              <CardDescription>
+                {t("可同时配置多个 MCP，一次预览并写入所选客户端的项目配置。")}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-6">
+              {ENGINES.map((value) => (
+                <label
+                  key={value}
+                  className="flex items-center gap-2"
+                  title={
+                    value === "warpgrep" && !morphReady
+                      ? t("需先验证 Morph API Key")
+                      : undefined
                   }
-                  onChange={(e) => {
-                    setProbe(null);
-                    setEngines((old) =>
-                      e.target.checked
-                        ? [...old, value]
-                        : old.filter((v) => v !== value),
-                    );
-                  }}
-                />
-                {engineLabel(value)} MCP
-                {value === "warpgrep" && !morphReady && (
-                  <span className="text-xs text-muted-foreground">
-                    · {t("需先验证 Morph API Key")}
-                  </span>
-                )}
-              </label>
-            ))}
-          </CardContent>
-        </Card>
-        {(["codex", "claude"] as const).map((client) => {
-          return (
-            <Card key={client}>
-              <CardHeader className="flex-row items-start justify-between gap-4 flex-wrap">
-                <div className="flex items-center gap-3">
+                >
                   <input
-                    id={`client-${client}`}
                     type="checkbox"
-                    checked={clients.includes(client)}
-                    onChange={(e) =>
-                      setClients((old) =>
-                        e.target.checked
-                          ? [...old, client]
-                          : old.filter((c) => c !== client),
-                      )
+                    checked={engines.includes(value)}
+                    disabled={
+                      busy ||
+                      (value === "warpgrep" &&
+                        !morphReady &&
+                        !engines.includes(value))
                     }
+                    onChange={(e) => {
+                      setProbe(null);
+                      setEngines((old) =>
+                        e.target.checked
+                          ? [...old, value]
+                          : old.filter((v) => v !== value),
+                      );
+                    }}
                   />
-                  <div>
-                    <CardTitle>
-                      <label htmlFor={`client-${client}`}>
-                        {client === "codex" ? "Codex" : "Claude Code"}
-                      </label>
-                    </CardTitle>
-                    <CardDescription className="mt-2 mono">
-                      {client === "codex" ? ".codex/config.toml" : ".mcp.json"}
-                    </CardDescription>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {ENGINES.map((value) => {
-                    const status = statuses.find(
-                      (s) => s.client === client && s.engine === value,
-                    );
-                    return (
-                      <Badge variant="secondary" key={value}>
-                        {engineLabel(value)} ·{" "}
-                        {status
-                          ? {
-                              missing: t("未配置"),
-                              configured: t("已配置"),
-                              repair: t("需修复"),
-                              parseError: t("解析错误"),
-                            }[status.state]
-                          : t("尚未获取")}
-                      </Badge>
-                    );
-                  })}
-                </div>
-              </CardHeader>
-              <CardContent className="text-xs text-muted-foreground">
-                {statuses
-                  .filter((s) => s.client === client && s.message)
-                  .map((status) => (
-                    <p
-                      key={status.engine}
-                      className="text-destructive mb-2 break-all"
-                    >
-                      {status.engine}: {status.message}
-                    </p>
-                  ))}
-                {t("配置状态不代表实际连接。当前项目总会话：")}
-                {snapshot?.sessions ?? t("尚未获取")}
-                {t("；尚未获取按客户端分类的会话信息。")}
-              </CardContent>
-            </Card>
-          );
-        })}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">{t("连接路径")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {engines.map((value) => (
-              <div key={value} className="mb-4">
-                <p className="text-sm font-medium">{engineLabel(value)}</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {value === "serena"
-                    ? t("客户端 HTTP → 当前项目 Serena")
-                    : value === "warpgrep"
-                      ? t(
-                          "客户端 HTTP → 共享网关 → 当前项目 WarpGrep 路由 → Morph API",
+                  {engineLabel(value)} MCP
+                  {value === "warpgrep" && !morphReady && (
+                    <span className="text-xs text-muted-foreground">
+                      · {t("需先验证 Morph API Key")}
+                    </span>
+                  )}
+                </label>
+              ))}
+            </CardContent>
+          </Card>
+          {(["codex", "claude"] as const).map((client) => {
+            return (
+              <Card key={client}>
+                <CardHeader className="flex-row items-start justify-between gap-4 flex-wrap">
+                  <div className="flex items-center gap-3">
+                    <input
+                      id={`client-${client}`}
+                      type="checkbox"
+                      checked={clients.includes(client)}
+                      onChange={(e) =>
+                        setClients((old) =>
+                          e.target.checked
+                            ? [...old, client]
+                            : old.filter((c) => c !== client),
                         )
-                      : t("客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph")}
+                      }
+                    />
+                    <div>
+                      <CardTitle>
+                        <label htmlFor={`client-${client}`}>
+                          {client === "codex" ? "Codex" : "Claude Code"}
+                        </label>
+                      </CardTitle>
+                      <CardDescription className="mt-2 mono">
+                        {client === "codex"
+                          ? ".codex/config.toml"
+                          : ".mcp.json"}
+                      </CardDescription>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {ENGINES.map((value) => {
+                      const status = statuses.find(
+                        (s) => s.client === client && s.engine === value,
+                      );
+                      return (
+                        <Badge variant="secondary" key={value}>
+                          {engineLabel(value)} ·{" "}
+                          {status
+                            ? {
+                                missing: t("未配置"),
+                                configured: t("已配置"),
+                                repair: t("需修复"),
+                                parseError: t("解析错误"),
+                              }[status.state]
+                            : t("尚未获取")}
+                        </Badge>
+                      );
+                    })}
+                  </div>
+                </CardHeader>
+                <CardContent className="text-xs text-muted-foreground">
+                  {statuses
+                    .filter((s) => s.client === client && s.message)
+                    .map((status) => (
+                      <p
+                        key={status.engine}
+                        className="text-destructive mb-2 break-all"
+                      >
+                        {status.engine}: {status.message}
+                      </p>
+                    ))}
+                  {engines.includes("codegraph") ? (
+                    <>
+                      {t("配置状态不代表实际连接。当前项目总会话：")}
+                      {snapshot?.sessions ?? t("尚未获取")}
+                      {t("；尚未获取按客户端分类的会话信息。")}
+                    </>
+                  ) : (
+                    t("配置状态不代表实际连接，请在客户端确认 MCP 连接状态。")
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">{t("连接路径")}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {engines.map((value) => (
+                <div key={value} className="mb-4">
+                  <p className="text-sm font-medium">{engineLabel(value)}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {value === "rea"
+                      ? t("客户端 stdio → REA 本地进程")
+                      : value === "serena"
+                        ? t("客户端 HTTP → 当前项目 Serena")
+                        : value === "warpgrep"
+                          ? t(
+                              "客户端 HTTP → 共享网关 → 当前项目 WarpGrep 路由 → Morph API",
+                            )
+                          : t(
+                              "客户端 HTTP → 共享网关 → 当前项目路由 → CodeGraph",
+                            )}
+                  </p>
+                  <p className="mono text-xs mt-2 break-all">
+                    {value === "rea"
+                      ? t("由客户端启动")
+                      : value === "serena"
+                        ? serena?.endpoint
+                        : value === "warpgrep"
+                          ? warpgrep?.endpoint
+                          : snapshot?.port
+                            ? `http://127.0.0.1:${snapshot.port}/mcp/${project.id}`
+                            : null}
+                  </p>
+                </div>
+              ))}
+              {engines.some((value) => value !== "rea") && (
+                <p className="text-xs text-muted-foreground leading-6">
+                  {t(
+                    "请先在 CodeGraph Desktop 启动当前项目；实例停止或桌面应用退出后，HTTP 服务不可用。客户端可能要求信任项目或批准 MCP；写入后请重新加载客户端。独立测试通过不表示真实客户端已连接。",
+                  )}
                 </p>
-                <p className="mono text-xs mt-2 break-all">
-                  {value === "serena"
-                    ? serena?.endpoint
-                    : value === "warpgrep"
-                      ? warpgrep?.endpoint
-                      : snapshot?.port
-                        ? `http://127.0.0.1:${snapshot.port}/mcp/${project.id}`
-                        : null}
-                </p>
-              </div>
-            ))}
-            <p className="text-xs text-muted-foreground leading-6">
-              {t(
-                "请先在 CodeGraph Desktop 启动当前项目；实例停止或桌面应用退出后，HTTP 服务不可用。客户端可能要求信任项目或批准 MCP；写入后请重新加载客户端。独立测试通过不表示真实客户端已连接。",
               )}
-            </p>
-            {engines.includes("serena") && (
-              <p className="text-xs text-muted-foreground leading-6 mt-2">
-                {t(
-                  "Serena 使用固定的独立本机端口，只监听 127.0.0.1。原生服务不使用 CodeGraph 的令牌；请仅供本机可信客户端使用。停止 Serena 或退出应用后连接不可用。",
-                )}
-              </p>
-            )}
-            {engines.includes("codegraph") && (
-              <p className="text-xs text-muted-foreground leading-6 mt-2">
-                {t(
-                  "所有项目共用一个固定本机端口，通过 /mcp/项目ID 路由分别连接；每个项目的令牌与会话独立隔离。重启后地址保持不变，端口冲突会报错，不会自动切换。配置含项目鉴权信息，请勿公开分享。",
-                )}
-              </p>
-            )}
-            {engines.includes("warpgrep") && (
-              <p className="text-xs text-muted-foreground leading-6 mt-2">
-                {t(
-                  "WarpGrep 与 CodeGraph 共用固定端口和项目令牌，通过 /warpgrep/项目ID 路由连接，且无需 CodeGraph 索引。API Key 只保存在本机，不写入项目配置；检索时读取的代码片段会发送至 Morph API。",
-                )}
-              </p>
-            )}
-            <div className="toolbar mt-4">
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={busy || !clients.length || !engines.length}
-                onClick={() => void configPreview("remove")}
-              >
-                {t("预览移除受管配置")}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(
-                      t(
-                        "在 MCP 配置中勾选需要的 MCP（CodeGraph、Serena、WarpGrep），选择客户端，预览并应用后重新加载客户端。使用前分别启动所需实例。",
-                      ),
-                    )
-                    .then(() => toast.success(t("接入说明已复制")))
-                }
-              >
-                <Copy />
-                {t("复制接入说明")}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+              {engines.includes("rea") && (
+                <p className="text-xs text-muted-foreground leading-6 mt-2">
+                  {t(
+                    "REA 由 Codex / Claude Code 按需启动，无需在桌面启动实例或建立 CodeGraph 索引。退出桌面应用不影响客户端的 REA 进程。",
+                  )}{" "}
+                  {t(
+                    "配置后重新加载客户端并批准 MCP。测试连接会临时启动 REA，仅验证握手和工具列表，完成后回收测试进程。",
+                  )}{" "}
+                  {t(
+                    "首次启动或测试会通过 npx 下载固定版本的 rea-agents，需要访问 npm registry。分析工具及其许可证由用户自行准备。",
+                  )}
+                </p>
+              )}
+              {engines.includes("serena") && (
+                <p className="text-xs text-muted-foreground leading-6 mt-2">
+                  {t(
+                    "Serena 使用固定的独立本机端口，只监听 127.0.0.1。原生服务不使用 CodeGraph 的令牌；请仅供本机可信客户端使用。停止 Serena 或退出应用后连接不可用。",
+                  )}
+                </p>
+              )}
+              {engines.includes("codegraph") && (
+                <p className="text-xs text-muted-foreground leading-6 mt-2">
+                  {t(
+                    "所有项目共用一个固定本机端口，通过 /mcp/项目ID 路由分别连接；每个项目的令牌与会话独立隔离。重启后地址保持不变，端口冲突会报错，不会自动切换。配置含项目鉴权信息，请勿公开分享。",
+                  )}
+                </p>
+              )}
+              {engines.includes("warpgrep") && (
+                <p className="text-xs text-muted-foreground leading-6 mt-2">
+                  {t(
+                    "WarpGrep 与 CodeGraph 共用固定端口和项目令牌，通过 /warpgrep/项目ID 路由连接，且无需 CodeGraph 索引。API Key 只保存在本机，不写入项目配置；检索时读取的代码片段会发送至 Morph API。",
+                  )}
+                </p>
+              )}
+              <div className="toolbar mt-4">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy || !clients.length || !engines.length}
+                  onClick={() => void configPreview("remove")}
+                >
+                  {t("预览移除受管配置")}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    void navigator.clipboard
+                      .writeText(
+                        t(
+                          "在项目 MCP 列表中勾选需要的客户端，配置会自动保存。重新加载客户端并批准 MCP；REA 由客户端启动，其他引擎需先启动实例。",
+                        ),
+                      )
+                      .then(() => toast.success(t("接入说明已复制")))
+                  }
+                >
+                  <Copy />
+                  {t("复制接入说明")}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </details>
         {probe && (
           <Alert variant={probe.success ? "default" : "destructive"}>
             {probe.success ? <CheckCircle2 /> : <TriangleAlert />}

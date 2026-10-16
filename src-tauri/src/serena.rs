@@ -98,6 +98,7 @@ pub fn binding_db(db: &mut rusqlite::Connection, id: &str) -> Result<Target> {
         name: "serena".into(),
         endpoint: format!("http://127.0.0.1:{port}/mcp"),
         authorization: None,
+        stdio: None,
     })
 }
 fn candidates(saved: Option<String>) -> Vec<PathBuf> {

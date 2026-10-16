@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-基于 **Tauri 2 + React + TypeScript + Vite** 的 CodeGraph 与 Serena 项目管理桌面应用。
+基于 **Tauri 2 + React + TypeScript + Vite** 的项目 MCP 管理桌面应用，支持 CodeGraph、Serena、WarpGrep 与 REA。
 
 每个项目独立启动 CodeGraph，使用独立索引、运行状态、日志和鉴权令牌。一个本地 HTTP 服务通过 `/mcp/{项目ID}` 路由到对应实例，Codex 与 Claude Code 仍通过项目级 MCP 配置连接。
 
@@ -42,6 +42,16 @@ Windows 安装器自动使用中文或英文，不弹出语言选择窗口。mac
 - 原配置无法解析时，可从错误提示进入“以覆盖模式预览”，再切换编辑修复；这一步不会写入文件。
 - 应用前备份原文件并检查外部修改。手动更改或删除 `codegraph` 的 URL/鉴权字段后，该条目可能不再连接当前项目，也不再登记为本项目受管条目。项目配置含本机鉴权信息，不应上传或分享这些令牌。
 
+## 项目 MCP 自动配置
+
+在项目的 **MCP 配置** 中，先在列表顶部切换 **Codex** 或 **Claude Code**，再打开所需 MCP 的开关。每行只显示状态圆点、名称和开关，顶部显示已配置数量。开启后自动合并写入当前客户端的项目配置，关闭后自动移除对应受管条目，无需点击预览或应用按钮。悬停行可查看说明，行内更多菜单提供连接测试和配置检查。
+
+列表从实际配置文件读取状态，切换引擎或重新打开项目后会保留；保存时显示“保存中”，失败后重新读取文件并显示实际状态。每次更改沿用备份、外部修改检测和写入失败回滚机制，保留其他 MCP 与设置。同名条目不受本应用管理或已被手动修改时，自动操作不会覆盖或删除它，可点击“检查配置”或展开 **高级配置** 处理冲突、手动编辑和预览。
+
+勾选只负责客户端配置；CodeGraph、Serena 与 WarpGrep 仍需启动实例，REA 由客户端启动。配置更新后请重新加载客户端并按客户端要求批准 MCP。
+
+左侧项目名称旁以单行彩色缩写标记 MCP：C（CodeGraph）、S（Serena）、W（WarpGrep）、R（REA）。受管引擎运行时标记填充颜色，停止时淡化，异常时显示红色边框；悬停可查看完整名称与状态。REA 标记表示由客户端管理，不代表已建立连接。
+
 ## Serena（可选引擎）
 
 CodeGraph 与 Serena 使用相同的工作台布局和页头操作。设置页将两个引擎作为同级卡片：宽窗口并排、窄窗口纵向排列，通用偏好单独放置。窗口支持拖动调整大小，最小尺寸为 800 × 560。
@@ -51,7 +61,7 @@ CodeGraph 与 Serena 使用相同的工作台布局和页头操作。设置页�
 1. 安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，执行 `uv tool install -p 3.13 serena-agent`，详见 [Serena 官方安装说明](https://oraios.github.io/serena/02-usage/010_installation.html)。
 2. 在“设置 → Serena 入口”中检测或手动选择可执行文件；检测通过后才保存入口。
 3. 选择项目和 Serena，点击“启动实例”。首次使用可能下载语言服务器依赖，失败时查看运行日志；各编程语言所需依赖由 Serena 管理。
-4. 在“MCP 配置”中默认同时勾选 CodeGraph 与 Serena，也可只选一个。选择 Codex / Claude Code 后，一次预览并应用两个 MCP；每个项目文件只写入一次，统一备份、失败回滚。默认合并保留其他设置，也支持覆盖和手动编辑。只修改项目的 `.codex/config.toml` / `.mcp.json`。
+4. 在“MCP 配置”顶部选择 Codex / Claude Code，打开 Serena 开关，项目配置自动保存；也可分别启用 CodeGraph 等其他 MCP。只修改项目的 `.codex/config.toml` / `.mcp.json`。
 
 Serena 通过 `--context ide --project <绝对路径>` 单项目模式启动原生 HTTP，每个项目使用固定独立端口 `http://127.0.0.1:<端口>/mcp`，客户端直接连接。启动检查要求存在符号工具且没有切换项目工具。端口冲突报错，不自动切换。原生 Serena 不使用 CodeGraph 的令牌，仅供本机可信客户端使用；单项目模式不是操作系统沙箱。
 
@@ -64,11 +74,24 @@ Serena 通过 `--context ide --project <绝对路径>` 单项目模式启动原�
 1. 在 [Morph 控制台](https://morphllm.com/dashboard/api-keys) 创建 API Key。
 2. 在“设置 → WarpGrep”中粘贴 Key，点击“验证并保存”。保存前会真实调用一次 WarpGrep 模型（约 1K tokens），成功才保存；Key 无效、额度不足、限流或网络失败都会提示且不保存。设置页只显示脱敏提示。“移除”会删除 Key 并停止所有运行中的 WarpGrep 路由。
 3. 选择项目和 WarpGrep，点击“启动实例”。未验证 Key 时拒绝启动；无需 CodeGraph 索引。
-4. 在“MCP 配置”中勾选 WarpGrep（验证 Key 后可选）及其他引擎并应用。客户端获得 `warpgrep` 条目，地址为 `http://127.0.0.1:<共享端口>/warpgrep/<项目ID>`，使用项目鉴权令牌。
+4. 在“MCP 配置”顶部选择客户端，打开 WarpGrep 开关（验证 Key 后可用），配置自动保存。客户端获得 `warpgrep` 条目，地址为 `http://127.0.0.1:<共享端口>/warpgrep/<项目ID>`，使用项目鉴权令牌。
 
 路由只暴露一个只读工具 `codebase_search`（参数 `search_string`；可选 `includeSource`，默认 false，仅返回文件路径与行段，设为 true 时附带对应代码；可选 `maxChars`，默认 12000）。模型发起的 grep/读取/列目录/glob 均在本机、且只在绑定的项目根目录内执行：绝对路径、`..` 越界及指向项目外的符号链接会被拒绝，常见依赖/构建目录、隐藏文件、嵌套仓库与 git worktree、二进制和超过 2 MB 的文件会跳过。每次检索最多 6 轮、100 秒（低于 Codex 默认 120 秒的工具超时），每个项目最多 4 个并发检索；单次模型请求超过 20 秒或临时失败时自动重试一次。每轮的模型耗时和工具调用都写入项目运行日志。
 
 Morph API Key 保存在仅当前用户可访问的应用数据目录中的应用数据库内，不写入项目配置文件。**检索过程中读取的代码片段会发送至 Morph API**，启用前请确认符合各项目的代码外发要求。停止 WarpGrep、删除/迁移项目、“全部停止”和退出应用都会注销路由。
+
+## REA（可选引擎）
+
+[REA（Reverse Engineer Anything）](https://github.com/morluto/rea) 提供应用、JavaScript / Electron、.NET 和原生二进制分析。本应用按官方 stdio 协议注册 REA，由 Codex / Claude Code 启动和管理进程。
+
+1. 准备 Node.js 22.x（≥22.19）、24.x（≥24.11）或 26+，并确保客户端和桌面应用的 PATH 中有 npm / npx。不支持 Node.js 23、25 和预发布版本。
+2. 选择项目和 **REA**，进入 **MCP 配置**。列表显示当前项目各客户端的实际配置状态。
+3. 在列表顶部选择 Codex / Claude Code，打开 REA 开关，项目配置自动保存，然后重新加载客户端并批准 MCP。使用固定版本 `npx -y rea-agents@6.5.0 mcp`；Windows 使用 `cmd.exe /d /c npx …`。首次启动需要联网下载包，Codex 配置允许 120 秒启动和 600 秒工具调用。
+4. 可直接点击 **测试连接**，无需启动 CodeGraph 或建立索引。测试临时启动 REA，执行 MCP 握手和工具发现，完成、失败、超时或退出桌面时均清理测试进程。测试通过仅证明 MCP 可连接，具体分析引擎需按任务另行验证。
+
+REA 的客户端进程不受桌面的“全部停止”和退出操作影响。项目级配置决定哪些客户端项目发现 REA，不限制工具的文件访问范围。JavaScript / Electron 与 .NET 静态分析无需原生反编译器；深度原生分析需按 [REA 官方文档](https://github.com/morluto/rea) 配置 Hopper、Ghidra 或 IDA 等工具及许可证。配套技能可按官方说明另行安装；本应用只注册 MCP，不执行 REA 的全局 `setup`。
+
+REA 配置使用已有的预览、合并、备份、回滚和受管条目移除流程，只修改项目的 `.codex/config.toml` / `.mcp.json`。手动更换 REA 的启动命令或参数后，该条目不再视为当前受管配置。
 
 ## 本地开发
 

@@ -1,4 +1,5 @@
 use crate::{configuration, models::*, persistence, AppState};
+use rusqlite::OptionalExtension;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -407,10 +408,12 @@ fn binding_for(state: &AppState, id: &str, engine: Option<&str>) -> Result<confi
                 name: "codegraph".into(),
                 endpoint: b.endpoint(),
                 authorization: Some(b.authorization()),
+                stdio: None,
             })
         }
         "serena" => crate::serena::binding(state, id),
         "warpgrep" => crate::warpgrep::binding(state, id),
+        "rea" => Ok(crate::rea::binding()),
         _ => Err(AppError::new(
             "INVALID_ENGINE",
             crate::i18n::tr("不支持的引擎", "Unknown engine"),
@@ -494,6 +497,51 @@ pub fn preview_client_config(
     Ok(preview)
 }
 #[tauri::command]
+pub async fn set_project_mcp(
+    state: State<'_, AppState>,
+    project_id: String,
+    client: String,
+    engine: String,
+    enabled: bool,
+) -> Result<configuration::ApplyResult> {
+    set_mcp_configuration(&state, project_id, client, engine, enabled).await
+}
+pub(crate) async fn set_mcp_configuration(
+    state: &AppState,
+    project_id: String,
+    client: String,
+    engine: String,
+    enabled: bool,
+) -> Result<configuration::ApplyResult> {
+    let lock = state.operation_lock(&project_id);
+    let _guard = lock.lock().await;
+    if state.quitting.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(AppError::new("APP_EXITING", "应用正在退出"));
+    }
+    let project = state.project(&project_id)?;
+    if enabled && engine == "warpgrep" {
+        crate::warpgrep::require_key(state)?;
+    }
+    let target = binding_for(state, &project_id, Some(&engine))?;
+    let fingerprint = state
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT fingerprint FROM managed_config WHERE project_id=?1 AND client=?2",
+            rusqlite::params![project_id, managed_key(&target.name, &client)],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let managed = fingerprint
+        .into_iter()
+        .map(|fp| (client.clone(), fp))
+        .collect();
+    let preview = configuration::preview_toggle(&project, &client, enabled, &target, &managed)?;
+    apply_config(state, &preview)
+}
+
+#[tauri::command]
 pub async fn apply_client_config(
     state: State<'_, AppState>,
     preview_id: String,
@@ -510,6 +558,12 @@ pub async fn apply_client_config(
     if !state.previews.lock().unwrap().contains_key(&preview_id) {
         return Err(AppError::new("PREVIEW_EXPIRED", "该预览已应用，请重新预览"));
     }
+    apply_config(&state, &preview)
+}
+fn apply_config(
+    state: &AppState,
+    preview: &configuration::ConfigPreview,
+) -> Result<configuration::ApplyResult> {
     let p = state.project(&preview.project_id)?;
     let root = preview
         .validated_root
@@ -521,7 +575,7 @@ pub async fn apply_client_config(
             "项目目录记录已变化，请重新预览",
         ));
     }
-    let result = configuration::apply(&preview, Path::new(root), &state.data)?;
+    let result = configuration::apply(preview, Path::new(root), &state.data)?;
     let succeeded = result
         .files
         .iter()
@@ -557,7 +611,7 @@ pub async fn apply_client_config(
         tx.commit()?;
     }
     if succeeded {
-        state.previews.lock().unwrap().remove(&preview_id);
+        state.previews.lock().unwrap().remove(&preview.preview_id);
     }
     Ok(result)
 }
@@ -604,8 +658,27 @@ pub async fn test_project_mcp(
     engine: Option<String>,
 ) -> Result<ProbeResult> {
     state.project(&project_id)?;
-    if !["codegraph", "serena", "warpgrep"].contains(&engine.as_deref().unwrap_or("codegraph")) {
+    if !["codegraph", "serena", "warpgrep", "rea"]
+        .contains(&engine.as_deref().unwrap_or("codegraph"))
+    {
         return Err(AppError::new("INVALID_ENGINE", "Unknown engine"));
+    }
+    if engine.as_deref() == Some("rea") {
+        let lock = state.operation_lock(&project_id);
+        let _guard = lock.lock().await;
+        if state.quitting.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AppError::new("APP_EXITING", "应用正在退出"));
+        }
+        let tools = crate::rea::probe(&state, state.project(&project_id)?).await?;
+        return Ok(ProbeResult {
+            success: true,
+            tools,
+            message: crate::i18n::tr(
+                "REA MCP 握手与工具列表验证通过，测试进程已停止。分析引擎可用性需按任务另行确认；真实客户端连接需重新加载客户端。",
+                "REA MCP handshake and tool list verified; the test process has stopped. Analysis providers require task-specific checks; reload your client to connect.",
+            ).into(),
+            checked_at: now(),
+        });
     }
     if engine.as_deref() == Some("warpgrep") {
         if !crate::warpgrep::is_running(&state, &project_id).await {
@@ -705,7 +778,7 @@ pub fn preview_restore_backup(
                 .collect::<Result<Vec<_>>>()?;
             let refs = bindings
                 .iter()
-                .map(|b| b as &dyn configuration::HttpTarget)
+                .map(|b| b as &dyn configuration::ConfigTarget)
                 .collect::<Vec<_>>();
             let preview =
                 configuration::preview_restore_many(&state.data, &operation_id, &p, &refs)?;

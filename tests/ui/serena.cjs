@@ -4,7 +4,10 @@ const { chromium } = require(
 );
 const assert = require("node:assert/strict");
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await chromium.launch({
+    channel: process.env.PLAYWRIGHT_CHANNEL || "chromium",
+    headless: true,
+  });
   try {
     for (const language of ["en", "zh-CN"]) {
       const page = await browser.newPage({
@@ -98,6 +101,7 @@ const assert = require("node:assert/strict");
                   error: null,
                 },
               };
+            if (command === "list_warpgrep_snapshots") return {};
             if (command === "serena_operation") {
               running = args.action !== "stop";
               return "serena-op";
@@ -121,13 +125,20 @@ const assert = require("node:assert/strict");
               }));
             if (["read_logs", "list_config_backups"].includes(command))
               return [];
-            if (command === "test_project_mcp")
+            if (command === "test_project_mcp") {
+              if (args.engine === "rea" && window.__reaFailure)
+                throw new Error("REA_MISSING_RUNTIME_FIXTURE");
               return {
                 success: true,
-                tools: ["find_symbol"],
-                message: "SERENA_HANDSHAKE_OK",
+                tools:
+                  args.engine === "rea" ? ["inspect_binary"] : ["find_symbol"],
+                message:
+                  args.engine === "rea"
+                    ? "REA_HANDSHAKE_OK"
+                    : "SERENA_HANDSHAKE_OK",
                 checkedAt: "2026-10-04",
               };
+            }
             if (command === "preview_client_config")
               return {
                 previewId: "preview",
@@ -139,8 +150,9 @@ const assert = require("node:assert/strict");
                     path: ".codex/config.toml",
                     before:
                       '[mcp_servers.codegraph]\nurl="http://127.0.0.1:1234/mcp/fixture"\n',
-                    after:
-                      '[mcp_servers.codegraph]\nurl="http://127.0.0.1:1234/mcp/fixture"\n[mcp_servers.serena]\nurl="http://127.0.0.1:58310/mcp"\n',
+                    after: args.engines.includes("rea")
+                      ? '[mcp_servers.rea]\ncommand="npx"\nargs=["-y","rea-agents@6.5.0","mcp"]\n'
+                      : '[mcp_servers.codegraph]\nurl="http://127.0.0.1:1234/mcp/fixture"\n[mcp_servers.serena]\nurl="http://127.0.0.1:58310/mcp"\n',
                     existed: true,
                     conflict: false,
                   },
@@ -179,7 +191,8 @@ const assert = require("node:assert/strict");
       await page.goto(process.env.UI_TEST_URL || "http://127.0.0.1:1420");
       const zh = language === "zh-CN";
       await page
-        .getByRole("button", { name: /Serena.*(Symbols|符号)/ })
+        .getByRole("group", { name: zh ? "项目引擎" : "Project engines" })
+        .getByRole("button", { name: /Serena/ })
         .click();
       await page.getByTestId("serena-panel").waitFor();
       assert.equal(
@@ -211,6 +224,7 @@ const assert = require("node:assert/strict");
           exact: true,
         })
         .click();
+      await page.getByTestId("advanced-mcp-config").locator("summary").click();
       assert(
         await page
           .getByRole("checkbox", { name: "CodeGraph MCP", exact: true })
@@ -341,6 +355,74 @@ const assert = require("node:assert/strict");
       await page.goto(
         (process.env.UI_TEST_URL || "http://127.0.0.1:1420") + "?healthy=1",
       );
+      await page
+        .getByRole("group", { name: zh ? "项目引擎" : "Project engines" })
+        .getByRole("button", { name: /REA/ })
+        .click();
+      await page.getByTestId("rea-panel").waitFor();
+      assert.equal(await page.getByTestId("engine-actions").count(), 0);
+      await page.screenshot({
+        path: `.tools/rea-overview-${language}.png`,
+        fullPage: true,
+      });
+      await page
+        .getByRole("tab", {
+          name: zh ? "MCP 配置" : "MCP configuration",
+          exact: true,
+        })
+        .click();
+      await page.getByTestId("advanced-mcp-config").locator("summary").click();
+      assert(
+        await page
+          .getByRole("checkbox", { name: "REA MCP", exact: true })
+          .isChecked(),
+      );
+      assert(
+        !(await page
+          .getByRole("checkbox", { name: "CodeGraph MCP", exact: true })
+          .isChecked()),
+      );
+      const probeButton = page.getByRole("button", {
+        name: zh ? "测试连接" : "Test connection",
+        exact: true,
+      });
+      assert(await probeButton.isEnabled());
+      await page.evaluate(() => (window.__reaFailure = true));
+      await probeButton.click();
+      await page
+        .getByText("REA_MISSING_RUNTIME_FIXTURE", { exact: true })
+        .waitFor();
+      await page.evaluate(() => (window.__reaFailure = false));
+      await probeButton.click();
+      await page.getByText("rea: REA_HANDSHAKE_OK", { exact: true }).waitFor();
+      await page
+        .getByRole("button", {
+          name: zh ? "预览并配置" : "Preview configuration",
+          exact: true,
+        })
+        .click();
+      await page.getByRole("dialog").waitFor();
+      assert(
+        (await page.getByRole("dialog").textContent()).includes(
+          "rea-agents@6.5.0",
+        ),
+      );
+      assert.deepEqual(
+        await page.evaluate(
+          () =>
+            window.__calls
+              .filter((c) => c.command === "preview_client_config")
+              .at(-1).args.engines,
+        ),
+        ["rea"],
+      );
+      await page
+        .getByRole("button", { name: zh ? "取消" : "Cancel", exact: true })
+        .click();
+      await page
+        .getByRole("checkbox", { name: "CodeGraph MCP", exact: true })
+        .check();
+      assert(await probeButton.isDisabled());
       for (const width of [1280, 1000]) {
         await page.setViewportSize({ width, height: 820 });
         const positions = [];
@@ -401,6 +483,16 @@ const assert = require("node:assert/strict");
       await page.keyboard.press("Control+,");
       const cgSettings = page.getByTestId("codegraph-settings"),
         srSettings = page.getByTestId("serena-settings");
+      await page.getByTestId("rea-settings").getByRole("link").click();
+      assert(
+        await page.evaluate(() =>
+          window.__calls.some(
+            (c) =>
+              c.command === "plugin:opener|open_url" &&
+              c.args.url === "https://github.com/morluto/rea",
+          ),
+        ),
+      );
       const settingsUrl = page.url();
       for (const [card, url] of [
         [cgSettings, "https://github.com/colbymchenry/codegraph"],
@@ -419,7 +511,9 @@ const assert = require("node:assert/strict");
           } else if (action === "middle") {
             await link.click({ button: "middle" });
           } else if (action === "control") {
-            await link.click({ modifiers: ["Control"] });
+            await link.click({
+              modifiers: [process.platform === "darwin" ? "Meta" : "Control"],
+            });
           } else await link.click();
           assert.deepEqual(
             await page.evaluate(() =>
@@ -504,7 +598,7 @@ const assert = require("node:assert/strict");
       await page.close();
     }
     console.log(
-      "Serena UI: bilingual engine selection, independent startup, configuration targeting, failure/success detection passed",
+      "Serena / REA UI: bilingual engine selection, client-managed stdio, configuration targeting, failure/success detection passed",
     );
   } finally {
     await browser.close();

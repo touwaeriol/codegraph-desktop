@@ -28,6 +28,40 @@ import { message } from "@/lib/ipc";
 import { EngineIcon } from "@/components/EngineIcon";
 
 type State = RuntimeSnapshot["state"];
+export function EngineMarker({
+  engine,
+  state,
+}: {
+  engine: "codegraph" | "serena" | "warpgrep" | "rea";
+  state?: State;
+}) {
+  const labels = {
+    running: t("运行中"),
+    stopped: t("已停止"),
+    starting: t("启动中"),
+    stopping: t("停止中"),
+    error: t("运行错误"),
+  };
+  const name = {
+    codegraph: "CodeGraph",
+    serena: "Serena",
+    warpgrep: "WarpGrep",
+    rea: "REA",
+  }[engine];
+  const label = `${name} · ${engine === "rea" ? t("由客户端启动") : state ? labels[state] : t("尚未获取")}`;
+  return (
+    <span
+      className="sidebar-engine-marker"
+      data-engine={engine}
+      data-state={engine === "rea" ? "client" : (state ?? "unknown")}
+      title={label}
+      role="img"
+      aria-label={label}
+    >
+      {{ codegraph: "C", serena: "S", warpgrep: "W", rea: "R" }[engine]}
+    </span>
+  );
+}
 export function EngineStatus({ snapshot }: { snapshot?: { state: State } }) {
   const labels = {
     running: t("运行中"),
@@ -271,7 +305,9 @@ export function EngineSettingsCard({
                   ? "serena"
                   : name === "WarpGrep"
                     ? "warpgrep"
-                    : "codegraph"
+                    : name === "REA"
+                      ? "rea"
+                      : "codegraph"
               }
             />
           </span>

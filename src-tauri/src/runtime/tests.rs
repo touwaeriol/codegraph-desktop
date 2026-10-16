@@ -14,6 +14,83 @@ struct Fixture {
     dir: tempfile::TempDir,
 }
 
+#[tokio::test]
+async fn project_mcp_toggles_serialize_writes_and_track_ownership_per_client() {
+    let fixture = Fixture::new();
+    let project = fixture.project();
+    let (codegraph, rea) = tokio::join!(
+        crate::commands::set_mcp_configuration(
+            &fixture.state,
+            project.id.clone(),
+            "codex".into(),
+            "codegraph".into(),
+            true,
+        ),
+        crate::commands::set_mcp_configuration(
+            &fixture.state,
+            project.id.clone(),
+            "codex".into(),
+            "rea".into(),
+            true,
+        ),
+    );
+    for applied in [codegraph.unwrap(), rea.unwrap()] {
+        assert!(applied.files.iter().all(|file| file.status == "success"));
+        assert!(Path::new(&applied.backup_path).exists());
+    }
+    let path = Path::new(&project.canonical_path).join(".codex/config.toml");
+    let doc = std::fs::read_to_string(&path)
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    assert!(doc["mcp_servers"].get("codegraph").is_some());
+    assert!(doc["mcp_servers"].get("rea").is_some());
+    assert!(!Path::new(&project.canonical_path)
+        .join(".mcp.json")
+        .exists());
+    crate::commands::set_mcp_configuration(
+        &fixture.state,
+        project.id.clone(),
+        "codex".into(),
+        "rea".into(),
+        false,
+    )
+    .await
+    .unwrap();
+    let statuses = crate::configuration::status(&project, &crate::rea::binding());
+    assert!(statuses.iter().all(|s| s.state == "missing"));
+    let state = &fixture.state;
+    let count: usize = state
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM managed_config WHERE project_id=?1 AND client='rea:codex'",
+            [&project.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+    assert!(state.gateways.lock().await.is_empty());
+    assert!(std::fs::read_to_string(&path)
+        .unwrap()
+        .contains("[mcp_servers.codegraph]"));
+    assert_eq!(
+        crate::commands::set_mcp_configuration(
+            &fixture.state,
+            project.id.clone(),
+            "codex".into(),
+            "warpgrep".into(),
+            true,
+        )
+        .await
+        .err()
+        .unwrap()
+        .code,
+        "MORPH_KEY_REQUIRED",
+    );
+}
+
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();

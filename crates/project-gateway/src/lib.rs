@@ -3,6 +3,7 @@ mod entry;
 mod job;
 mod policy;
 pub mod relay;
+mod stdio;
 pub mod warpgrep;
 use anyhow::Context;
 use axum::{
@@ -28,6 +29,7 @@ use std::{
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
+pub use stdio::probe_stdio;
 use tokio::{
     net::TcpListener,
     process::{Child, Command},

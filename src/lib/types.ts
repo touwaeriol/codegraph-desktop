@@ -90,7 +90,7 @@ export interface ConfigStatus {
   message: string | null;
 }
 export type Client = "codex" | "claude";
-export type Engine = "codegraph" | "serena" | "warpgrep";
+export type Engine = "codegraph" | "serena" | "warpgrep" | "rea";
 export interface SerenaSnapshot {
   state: RuntimeSnapshot["state"];
   pid: number | null;

@@ -1,5 +1,50 @@
 // Chinese source messages are typed keys. Raw project and upstream text never passes through this catalog.
 export const english = {
+  "{0} 个 MCP 已配置": "{0} MCP servers configured",
+  "MCP 客户端": "MCP client",
+  "{0} 操作": "{0} actions",
+  "开关自动保存，客户端需重新加载 MCP。":
+    "Changes save automatically. Reload MCP in your client.",
+  "项目 MCP 列表": "Project MCP list",
+  "按客户端勾选即自动配置，取消勾选即移除受管条目。所有更改自动备份，其他 MCP 和设置会保留。":
+    "Select a client to configure it automatically; deselect to remove its managed entry. Changes are backed up, preserving other MCPs and settings.",
+  "勾选即保存，配置状态与项目文件保持同步。":
+    "Selections save automatically and stay in sync with project files.",
+  "配置保存后请重新加载客户端并批准 MCP。CodeGraph、Serena 和 WarpGrep 需启动实例；REA 由客户端启动。":
+    "Reload your client and approve MCP after saving. Start CodeGraph, Serena, and WarpGrep instances; clients launch REA.",
+  "在项目 MCP 列表中勾选需要的客户端，配置会自动保存。重新加载客户端并批准 MCP；REA 由客户端启动，其他引擎需先启动实例。":
+    "Select clients in the project MCP list to save configuration automatically. Reload clients and approve MCP; clients launch REA, while other engines need running instances.",
+  "仅在修复冲突或自定义配置时使用预览和编辑。":
+    "Use preview and editing to resolve conflicts or customize configuration.",
+  保存中: "Saving",
+  正在读取配置: "Reading configuration",
+  检查配置: "Review configuration",
+  高级配置: "Advanced configuration",
+  应用与二进制逆向分析: "Application & binary analysis",
+  "可选引擎 · 应用与二进制逆向分析":
+    "Optional engine · application and binary analysis",
+  由客户端启动: "Client-managed",
+  本地分析工具: "Local analysis tools",
+  "客户端 stdio → REA 本地进程": "Client stdio → Local REA process",
+  "配置状态不代表实际连接，请在客户端确认 MCP 连接状态。":
+    "Configuration status does not indicate a live connection. Check MCP connection status in your client.",
+  "为当前项目配置所选 MCP；REA 由客户端启动，其余引擎连接桌面受管实例。":
+    "Configure the selected MCPs for this project. Clients launch REA; other engines use desktop-managed instances.",
+  "REA 需要 Node.js 22.19+（22.x）、24.11+（24.x）或 26+，以及 PATH 中的 npm / npx；不支持 Node.js 23、25 和预发布版本。":
+    "REA requires Node.js 22.x (22.19+), 24.x (24.11+), or 26+, with npm / npx on PATH. Node.js 23, 25, and prereleases are unsupported.",
+  "JavaScript / Electron 和 .NET 静态分析无需原生反编译器；深度原生分析需自行配置 Hopper、Ghidra 或 IDA 等工具。":
+    "Static JavaScript / Electron and .NET analysis needs no native decompiler. Deep native analysis requires tools such as Hopper, Ghidra, or IDA.",
+  "首次启动或测试会通过 npx 下载固定版本的 rea-agents，需要访问 npm registry。分析工具及其许可证由用户自行准备。":
+    "The first launch or test downloads a pinned rea-agents version through npx and requires npm registry access. Supply analysis tools and their licenses separately.",
+  "REA 官方项目与安装说明 ↗": "REA project and installation guide ↗",
+  "REA 由 Codex / Claude Code 按需启动，无需在桌面启动实例或建立 CodeGraph 索引。退出桌面应用不影响客户端的 REA 进程。":
+    "Codex / Claude Code launches REA on demand. No desktop instance or CodeGraph index is required. Exiting the desktop app does not stop the client's REA process.",
+  "配置后重新加载客户端并批准 MCP。测试连接会临时启动 REA，仅验证握手和工具列表，完成后回收测试进程。":
+    "Reload your client and approve MCP after configuration. Testing temporarily starts REA to verify the handshake and tool list, then stops the test process.",
+  "Windows 配置使用 cmd.exe /d /c 启动 npx。项目配置只注册 MCP；配套技能可按 REA 官方说明另行安装。":
+    "Windows configuration uses cmd.exe /d /c to launch npx. Project configuration registers MCP; install workflow skills separately using REA's instructions.",
+  "在 MCP 配置中勾选需要的 MCP（CodeGraph、Serena、WarpGrep、REA），选择客户端，预览并应用后重新加载客户端。REA 由客户端启动，其他引擎需先启动实例。":
+    "Select the MCPs you need (CodeGraph, Serena, WarpGrep, REA), choose your clients, preview and apply, then reload the clients. Clients launch REA; start the other engines first.",
   "在 MCP 配置中勾选 CodeGraph 和 Serena，选择客户端，预览并应用后重新加载客户端。使用前分别启动所需实例。":
     "Select CodeGraph and Serena in MCP configuration, choose your clients, preview and apply, then reload the clients. Start each required engine before use.",
   "选择 MCP": "Select MCPs",
@@ -26,8 +71,7 @@ export const english = {
   项目引擎: "Project engines",
   代码图谱与关系检索: "Code graph & relationships",
   "LSP 查询与诊断": "LSP queries & diagnostics",
-  "符号定位、引用分析与诊断":
-    "Symbol lookup, references and diagnostics",
+  "符号定位、引用分析与诊断": "Symbol lookup, references and diagnostics",
   "默认仅启用 LSP 查询与诊断。文件编辑、文本搜索及 memory 等辅助工具已禁用。":
     "Only LSP queries and diagnostics are enabled by default. File editing, text search, memory and other auxiliary tools are disabled.",
   "启动 Serena": "Start Serena",
@@ -398,7 +442,7 @@ export const english = {
     "Only the read-only codebase_search tool is exposed: the model plans grep, listing and reads, and the desktop app executes them locally inside this project only.",
   "需先在设置中配置并验证 Morph API Key，才能启动 WarpGrep。":
     "Configure and validate a Morph API key in Settings before starting WarpGrep.",
-  "前往设置": "Open Settings",
+  前往设置: "Open Settings",
   检索模型: "Search model",
   共享网关路由: "Shared gateway route",
   "启动 WarpGrep": "Start WarpGrep",
