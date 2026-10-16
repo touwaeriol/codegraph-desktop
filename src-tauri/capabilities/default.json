@@ -10,6 +10,7 @@
       "allow": [
         { "url": "https://github.com/colbymchenry/codegraph" },
         { "url": "https://github.com/morluto/rea" },
+        { "url": "https://github.com/touwaeriol/codegraph-desktop/releases" },
         {
           "url": "https://oraios.github.io/serena/02-usage/010_installation.html"
         },

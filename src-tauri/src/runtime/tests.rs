@@ -15,6 +15,31 @@ struct Fixture {
 }
 
 #[tokio::test]
+async fn update_preparation_stops_owned_processes_and_keeps_resume_intent() {
+    let fixture = Fixture::new();
+    let project = fixture.project();
+    fixture.start(&project.id).await.unwrap();
+    fixture
+        .state
+        .remember_engine(&project.id, "codegraph", true);
+    fixture.state.quitting.store(true, Ordering::SeqCst);
+    assert!(crate::stop_managed(fixture.app.handle(), &fixture.state).await);
+    assert!(fixture.state.gateways.lock().await.is_empty());
+    assert!(fixture.state.http_host.lock().await.is_none());
+    assert!(project_protocol::read_runtime(&project.id).is_err());
+    assert_eq!(fixture.state.snapshot(&project.id).state, "stopped");
+    assert_eq!(
+        crate::resume::plan(&fixture.state.data, std::slice::from_ref(&project)),
+        vec![(project.id.clone(), vec!["codegraph"])]
+    );
+    assert!(fixture.state.tasks.reopen());
+    fixture.state.quitting.store(false, Ordering::SeqCst);
+    fixture.start(&project.id).await.unwrap();
+    fixture.assert_running(&project.id).await;
+    fixture.stop(&project.id).await;
+}
+
+#[tokio::test]
 async fn project_mcp_toggles_serialize_writes_and_track_ownership_per_client() {
     let fixture = Fixture::new();
     let project = fixture.project();

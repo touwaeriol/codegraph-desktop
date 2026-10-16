@@ -73,6 +73,7 @@ import { SerenaPanel, SerenaSettings, useSerena } from "./Serena";
 import { ReaPanel, ReaSettings } from "./Rea";
 import { WarpGrepPanel, WarpGrepSettings, useWarpGrep } from "./WarpGrep";
 import { ProjectTools } from "./ProjectTools";
+import { useUpdates, UpdateNotice, UpdateSettings } from "./Updates";
 import {
   EngineStatus as Status,
   EngineActions,
@@ -103,6 +104,7 @@ export function ErrorNotice({ error }: { error: string }) {
 }
 export default function App() {
   const language = useLanguage();
+  const updates = useUpdates();
   const [projects, setProjects] = useState<Project[]>([]),
     [snapshots, setSnapshots] = useState<Record<string, RuntimeSnapshot>>({}),
     [selected, setSelected] = useState(""),
@@ -684,6 +686,7 @@ export default function App() {
               </div>
             </header>
             <div className="content settings-content space-y-5">
+              <UpdateSettings updates={updates} />
               <ErrorNotice error={settingsError} />
               {desktop && !settings ? (
                 <p role="status" className="text-sm text-muted-foreground">
@@ -744,6 +747,7 @@ export default function App() {
             </div>
           </section>
           <div hidden={section !== "project"}>
+            <UpdateNotice updates={updates} open={openSettings} />
             {project ? (
               <>
                 <header className="project-header">

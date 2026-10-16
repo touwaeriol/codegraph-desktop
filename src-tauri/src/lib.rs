@@ -11,6 +11,7 @@ mod rea;
 mod resume;
 mod runtime;
 mod serena;
+mod updates;
 mod warpgrep;
 use models::*;
 use std::{
@@ -224,85 +225,104 @@ fn shutdown(app: tauri::AppHandle) {
     }
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
-        let report = state
-            .tasks
-            .close_and_drain(
-                std::time::Duration::from_secs(15),
-                std::time::Duration::from_secs(2),
-            )
-            .await;
-        let gateways =
-            match tokio::time::timeout(std::time::Duration::from_secs(2), state.gateways.lock())
-                .await
-            {
-                Ok(mut gateways) => std::mem::take(&mut *gateways),
-                Err(_) => {
-                    state.exit_ready.store(true, Ordering::SeqCst);
-                    app.exit(1);
-                    return;
-                }
-            };
-        let mut stops = tokio::task::JoinSet::new();
-        for (id, gateway) in gateways {
-            stops.spawn(async move {
-                let revoked = project_protocol::remove_runtime(&id).is_ok();
-                let stopped =
-                    tokio::time::timeout(std::time::Duration::from_secs(10), gateway.stop())
-                        .await
-                        .is_ok_and(|r| r.is_ok());
-                (id, revoked && stopped)
-            });
+        let clean = stop_managed(&app, &state).await;
+        state.exit_ready.store(true, Ordering::SeqCst);
+        app.exit(if clean { 0 } else { 1 });
+    });
+}
+async fn stop_managed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, state: &AppState) -> bool {
+    let report = state
+        .tasks
+        .close_and_drain(
+            std::time::Duration::from_secs(15),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+    // 同时等待未通过任务注册表执行的 WarpGrep/项目操作，防止退出期间新建路由。
+    let projects = match persistence::list(&state.db.lock().unwrap()) {
+        Ok(projects) => projects,
+        Err(_) => return false,
+    };
+    let mut guards = Vec::new();
+    for project in projects {
+        let lock = state.operation_lock(&project.id);
+        match tokio::time::timeout(std::time::Duration::from_secs(20), lock.lock_owned()).await {
+            Ok(guard) => guards.push(guard),
+            Err(_) => return false,
         }
-        let mut clean = report.remaining == 0;
-        while let Some(result) = stops.join_next().await {
-            match result {
-                Ok((id, true)) => {
-                    let mut snapshot = state.snapshot(&id);
-                    snapshot.state = "stopped".into();
-                    snapshot.pid = None;
-                    snapshot.sessions = 0;
-                    snapshot.started_at = None;
-                    state.publish(&app, snapshot);
-                    state.log(
-                        &app,
-                        &id,
-                        "info",
-                        "shutdown",
-                        i18n::tr(
-                            "受管 CodeGraph 已停止，桌面即将退出",
-                            "Managed CodeGraph has stopped. The desktop application is exiting",
-                        ),
-                    );
-                }
-                Ok((id, false)) => {
-                    clean = false;
-                    state.log(
-                        &app,
+    }
+    let gateways = match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        state.gateways.lock(),
+    )
+    .await
+    {
+        Ok(mut gateways) => std::mem::take(&mut *gateways),
+        Err(_) => return false,
+    };
+    let mut stops = tokio::task::JoinSet::new();
+    for (id, gateway) in gateways {
+        stops.spawn(async move {
+            let revoked = project_protocol::remove_runtime(&id).is_ok();
+            let stopped = tokio::time::timeout(std::time::Duration::from_secs(10), gateway.stop())
+                .await
+                .is_ok_and(|r| r.is_ok());
+            (id, revoked && stopped)
+        });
+    }
+    let mut clean = report.remaining == 0;
+    while let Some(result) = stops.join_next().await {
+        match result {
+            Ok((id, true)) => {
+                let mut snapshot = state.snapshot(&id);
+                snapshot.state = "stopped".into();
+                snapshot.pid = None;
+                snapshot.sessions = 0;
+                snapshot.started_at = None;
+                state.publish(app, snapshot);
+                state.log(
+                    app,
+                    &id,
+                    "info",
+                    "shutdown",
+                    i18n::tr(
+                        "受管 CodeGraph 已停止，桌面即将退出",
+                        "Managed CodeGraph has stopped. The desktop application is exiting",
+                    ),
+                );
+            }
+            Ok((id, false)) => {
+                clean = false;
+                state.log(
+                        app,
                         &id,
                         "error",
                         "shutdown",
                         i18n::tr("进程停止或运行记录清理失败，已回收本应用持有的进程资源","Process shutdown or runtime record cleanup failed; owned process resources have been released"),
                     );
-                }
-                Err(_) => clean = false,
             }
+            Err(_) => clean = false,
         }
-        if let Some(host) = state.http_host.lock().await.take() {
-            // Routes are owned by the host; drop WarpGrep handles before it stops.
-            std::mem::take(&mut *state.warpgrep_instances.lock().await);
-            clean &= host.stop().await.is_ok();
+    }
+    if let Some(host) = state.http_host.lock().await.take() {
+        // Routes are owned by the host; drop WarpGrep handles before it stops.
+        std::mem::take(&mut *state.warpgrep_instances.lock().await);
+        clean &= host.stop().await.is_ok();
+    }
+    let mut serena_stops = tokio::task::JoinSet::new();
+    for (_, mut instance) in std::mem::take(&mut *state.serena_instances.lock().await) {
+        serena_stops.spawn(async move { instance.stop().await.is_ok() });
+    }
+    while let Some(result) = serena_stops.join_next().await {
+        clean &= result.unwrap_or(false);
+    }
+    for snapshot in state.serena_snapshots.lock().unwrap().values_mut() {
+        if ["running", "starting", "stopping"].contains(&snapshot.state.as_str()) {
+            *snapshot = serena::Snapshot::default();
         }
-        let mut serena_stops = tokio::task::JoinSet::new();
-        for (_, mut instance) in std::mem::take(&mut *state.serena_instances.lock().await) {
-            serena_stops.spawn(async move { instance.stop().await.is_ok() });
-        }
-        while let Some(result) = serena_stops.join_next().await {
-            clean &= result.unwrap_or(false);
-        }
-        let _aborted_tasks = report.aborted;
-        state.exit_ready.store(true, Ordering::SeqCst);
-        app.exit(if clean { 0 } else { 1 });
-    });
+    }
+    let _aborted_tasks = report.aborted;
+    clean
 }
 #[cfg(unix)]
 fn install_shutdown_signals(app: tauri::AppHandle) {
@@ -393,6 +413,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)
@@ -432,6 +453,7 @@ pub fn run() {
                 exit_ready: AtomicBool::new(false),
                 active_indexes: AtomicUsize::new(0),
             });
+            updates::setup(app.handle())?;
             for note in migration_notes {
                 eprintln!("HTTP configuration migration: {note}");
             }
@@ -508,7 +530,7 @@ pub fn run() {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     let state = monitor.state::<AppState>();
                     if state.quitting.load(Ordering::SeqCst) {
-                        break;
+                        continue;
                     }
                     let gateways = state.gateways.lock().await;
                     for (id, g) in gateways.iter() {
@@ -591,7 +613,12 @@ pub fn run() {
             commands::preview_previous_config,
             commands::open_project_directory,
             commands::open_app_data_directory,
-            commands::export_project_logs
+            commands::export_project_logs,
+            updates::get_update_snapshot,
+            updates::check_for_updates,
+            updates::install_update,
+            updates::cancel_update_download,
+            updates::set_auto_update_check
         ])
         .build(context);
     let app = match app {

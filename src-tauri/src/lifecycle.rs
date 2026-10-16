@@ -91,6 +91,15 @@ impl TaskRegistry {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// 更新安装失败后，只有旧任务全部退出才允许重新提交任务。
+    pub fn reopen(&self) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.tasks.is_empty() {
+            return false;
+        }
+        inner.closed = false;
+        true
+    }
     async fn wait_empty(&self, budget: Duration) {
         let _ = tokio::time::timeout(budget, async {
             while !self.is_empty() {

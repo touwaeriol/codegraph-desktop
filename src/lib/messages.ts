@@ -1,5 +1,34 @@
 // Chinese source messages are typed keys. Raw project and upstream text never passes through this catalog.
 export const english = {
+  软件更新: "Software updates",
+  尚未检查更新: "Updates have not been checked",
+  "正在检查更新…": "Checking for updates…",
+  发现新版本: "A new version is available",
+  已是最新版本: "You're up to date",
+  "正在下载并校验更新…": "Downloading and verifying update…",
+  "正在停止受管实例…": "Stopping managed instances…",
+  "正在安装，完成后将自动重启…":
+    "Installing; the app will restart when finished…",
+  更新未完成: "Update could not be completed",
+  "CodeGraph Desktop {0} 可用": "CodeGraph Desktop {0} is available",
+  查看更新: "View update",
+  正在更新应用: "Updating application",
+  "当前版本：{0}": "Current version: {0}",
+  "上次检查：{0}": "Last checked: {0}",
+  检查更新: "Check for updates",
+  下载并安装: "Download and install",
+  取消下载: "Cancel download",
+  下载进度: "Download progress",
+  "当前运行方式不支持应用内安装，请前往发布页下载安装包。Linux DEB 请使用系统包管理器更新。":
+    "This launch mode does not support in-app installation. Download an installer from the releases page. Update Linux DEB installations with your package manager.",
+  更新说明: "Release notes",
+  "自动检查 GitHub Release 更新": "Automatically check GitHub Releases",
+  "启动后及每 6 小时检查一次；下载安装需要你确认，项目与设置会保留。":
+    "Checks after startup and every 6 hours. Download and installation require your confirmation; projects and settings are preserved.",
+  "打开 GitHub 发布页": "Open GitHub releases",
+  安装更新并重启: "Install update and restart",
+  "请先保存正在进行的工作。下载和签名校验完成后，将停止受管实例、安装更新并重新打开应用。":
+    "Save your work first. After download and signature verification, managed instances will stop, the update will install, and the app will reopen.",
   "{0} 个 MCP 已配置": "{0} MCP servers configured",
   "MCP 客户端": "MCP client",
   "{0} 操作": "{0} actions",

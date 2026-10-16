@@ -5,7 +5,10 @@ const { chromium } = require(
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await chromium.launch({
+    channel: process.env.PLAYWRIGHT_CHANNEL || "chromium",
+    headless: true,
+  });
   const errors = [];
   try {
     for (const language of ["en", "zh-CN"]) {
@@ -37,15 +40,92 @@ const fs = require("node:fs");
           calls: [],
         };
         window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
+        const callbacks = new Map();
+        const updateListeners = [];
+        window.__update = {
+          sequence: 0,
+          status: "available",
+          currentVersion: "0.1.23",
+          latestVersion: "0.1.24",
+          notes: "<script>not executable</script>",
+          checkedAt: "2026-10-16T00:00:00Z",
+          autoCheck: true,
+          canInstall: true,
+          downloaded: 0,
+          total: null,
+          error: null,
+        };
+        window.__publishUpdate = (change) => {
+          Object.assign(window.__update, change, { sequence: ++sequence });
+          for (const listener of updateListeners)
+            callbacks.get(listener)?.({ payload: { ...window.__update } });
+          return { ...window.__update };
+        };
         window.__TAURI_INTERNALS__ = {
-          transformCallback() {
-            return ++sequence;
+          transformCallback(callback) {
+            const id = ++sequence;
+            callbacks.set(id, callback);
+            return id;
           },
           unregisterCallback() {},
           async invoke(command, args = {}) {
-            if (command === "list_serena_snapshots") return {};
+            if (
+              ["list_serena_snapshots", "list_warpgrep_snapshots"].includes(
+                command,
+              )
+            )
+              return {};
             window.__detection.calls.push({ command, args });
+            if (
+              command === "plugin:event|listen" &&
+              args.event === "app-update"
+            )
+              updateListeners.push(args.handler);
             if (command.startsWith("plugin:event|")) return ++sequence;
+            if (command === "get_update_snapshot")
+              return { ...window.__update };
+            if (command === "set_auto_update_check")
+              return window.__publishUpdate({ autoCheck: args.enabled });
+            if (command === "check_for_updates") {
+              window.__publishUpdate({ status: "checking", error: null });
+              await new Promise((resolve) => setTimeout(resolve, 20));
+              return window.__publishUpdate(
+                window.__checkError
+                  ? {
+                      status: "error",
+                      error: {
+                        code: "NETWORK",
+                        message: "UPDATE_OFFLINE_FIXTURE",
+                      },
+                    }
+                  : {
+                      status: "available",
+                      latestVersion: "0.1.24",
+                      error: null,
+                    },
+              );
+            }
+            if (command === "install_update") {
+              window.__publishUpdate({
+                status: "downloading",
+                downloaded: 50,
+                total: 200,
+                error: null,
+              });
+              return new Promise((resolve) => {
+                window.__finishUpdate = resolve;
+              });
+            }
+            if (command === "cancel_update_download") {
+              const snapshot = window.__publishUpdate({
+                status: "available",
+                downloaded: 0,
+                total: null,
+              });
+              window.__finishUpdate(snapshot);
+              return;
+            }
+            if (command === "plugin:opener|open_url") return;
             if (command === "list_projects") return [project];
             if (command === "get_project_snapshot")
               return {
@@ -90,6 +170,16 @@ const fs = require("node:fs");
         };
       }, language);
       await page.goto(process.env.UI_TEST_URL || "http://127.0.0.1:1420");
+      await page.getByTestId("update-notice").waitFor();
+      assert.equal(
+        await page.evaluate(
+          () =>
+            window.__detection.calls.filter(
+              (c) => c.command === "install_update",
+            ).length,
+        ),
+        0,
+      );
       await page
         .getByRole("button", { name: language === "en" ? /Settings/ : /设置/ })
         .click();
@@ -177,6 +267,95 @@ const fs = require("node:fs");
         "D:\\custom\\codegraph.cmd",
       );
       await page.locator("main").evaluate((el) => (el.scrollTop = 0));
+      const updates = page.getByTestId("update-settings");
+      const check = updates.getByRole("button", {
+        name: language === "en" ? "Check for updates" : "检查更新",
+        exact: true,
+      });
+      await check.click();
+      await updates.getByText(/0\.1\.24/).waitFor();
+      const auto = updates.getByRole("checkbox");
+      await auto.uncheck();
+      assert.equal(await page.evaluate(() => window.__update.autoCheck), false);
+      await page.evaluate(() => (window.__checkError = true));
+      await check.click();
+      await updates
+        .getByText("UPDATE_OFFLINE_FIXTURE", { exact: true })
+        .waitFor();
+      await page.evaluate(() => (window.__checkError = false));
+      await check.click();
+      const install = updates.getByRole("button", {
+        name: language === "en" ? "Download and install" : "下载并安装",
+        exact: true,
+      });
+      await install.click();
+      const dialog = page.getByRole("dialog");
+      await dialog.waitFor();
+      assert.equal(
+        await page.evaluate(
+          () =>
+            window.__detection.calls.filter(
+              (c) => c.command === "install_update",
+            ).length,
+        ),
+        0,
+      );
+      await dialog
+        .getByRole("button", {
+          name:
+            language === "en" ? "Install update and restart" : "安装更新并重启",
+          exact: true,
+        })
+        .click();
+      await updates.getByRole("progressbar").waitFor();
+      assert.equal(
+        await updates.getByRole("progressbar").getAttribute("value"),
+        "25",
+      );
+      await updates
+        .getByRole("button", {
+          name: language === "en" ? "Cancel download" : "取消下载",
+          exact: true,
+        })
+        .click();
+      await install.click();
+      await dialog
+        .getByRole("button", {
+          name:
+            language === "en" ? "Install update and restart" : "安装更新并重启",
+          exact: true,
+        })
+        .click();
+      await page.evaluate(() =>
+        window.__publishUpdate({ status: "preparing" }),
+      );
+      await dialog.waitFor();
+      await page.keyboard.press("Escape");
+      assert(await dialog.isVisible());
+      await page.evaluate(() => {
+        const snapshot = window.__publishUpdate({
+          status: "error",
+          error: { code: "INSTALL", message: "UPDATE_INSTALL_FAILED_FIXTURE" },
+        });
+        window.__finishUpdate(snapshot);
+      });
+      await dialog.waitFor({ state: "hidden" });
+      await updates
+        .getByText("UPDATE_INSTALL_FAILED_FIXTURE", { exact: true })
+        .waitFor();
+      await page.evaluate(() => window.__publishUpdate({ canInstall: false }));
+      assert.equal(await install.count(), 0);
+      await updates.getByRole("link").click();
+      assert.equal(
+        await page.evaluate(
+          () =>
+            window.__detection.calls
+              .filter((c) => c.command === "plugin:opener|open_url")
+              .at(-1).args.url,
+        ),
+        "https://github.com/touwaeriol/codegraph-desktop/releases",
+      );
+      await page.locator("main").evaluate((el) => (el.scrollTop = 0));
       await page.screenshot({
         path: `.tools/environment-detection-${language}.png`,
       });
@@ -196,6 +375,8 @@ const fs = require("node:fs");
             "successful detection refreshes cached project snapshot and clears stale CLI error",
             "unsaved language selection remains a draft after detection",
             "English and Chinese stay selected, no preference write",
+            "update notice, explicit install confirmation, download progress and cancellation",
+            "network/install errors remain retryable and unsupported installers open official releases",
           ],
           pageErrors: errors,
         },

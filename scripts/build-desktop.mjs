@@ -41,7 +41,7 @@ const supported = new Map([
       arch: "arm64",
       // Explicit app keeps the .app bundle available for the subsequent pkgbuild.
       bundles: "app,dmg",
-      extensions: [".dmg", ".pkg"],
+      extensions: [".dmg", ".pkg", ".app.tar.gz"],
     },
   ],
   [
@@ -210,7 +210,9 @@ if (mode !== "VerifyVersion") {
     const hashes = [];
     for (const suffix of platform.extensions) {
       const matching = files.filter(
-        (p) => p.endsWith(suffix) && p.includes(`_${version}_`),
+        (p) =>
+          p.endsWith(suffix) &&
+          (suffix === ".app.tar.gz" || p.includes(`_${version}_`)),
       );
       if (matching.length !== 1)
         throw new Error(
@@ -222,6 +224,13 @@ if (mode !== "VerifyVersion") {
       hashes.push(
         `${createHash("sha256").update(bytes).digest("hex")}  ${name}`,
       );
+      if ([".exe", ".AppImage", ".app.tar.gz"].includes(suffix)) {
+        const signature = readFileSync(`${matching[0]}.sig`);
+        writeFileSync(join(output, `${name}.sig`), signature);
+        hashes.push(
+          `${createHash("sha256").update(signature).digest("hex")}  ${name}.sig`,
+        );
+      }
     }
     writeFileSync(
       join(output, `SHA256SUMS-${platform.platform}-${platform.arch}.txt`),

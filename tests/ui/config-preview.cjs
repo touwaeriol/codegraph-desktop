@@ -58,6 +58,20 @@ const fs = require("node:fs");
             return {};
           window.__uiTest.calls.push({ command, args });
           if (command.startsWith("plugin:event|")) return ++sequence;
+          if (command === "get_update_snapshot")
+            return {
+              sequence: 0,
+              status: "idle",
+              currentVersion: "0.1.23",
+              latestVersion: null,
+              notes: null,
+              checkedAt: null,
+              autoCheck: true,
+              canInstall: true,
+              downloaded: 0,
+              total: null,
+              error: null,
+            };
           if (command === "list_projects") return [project];
           if (command === "get_settings")
             return {

@@ -248,6 +248,8 @@ pub async fn warpgrep_operation(
     if !["start", "stop", "restart"].contains(&action.as_str()) {
         return Err(AppError::new("INVALID_ACTION", action));
     }
+    let lock = state.operation_lock(&project_id);
+    let _guard = lock.lock().await;
     if state.quitting.load(std::sync::atomic::Ordering::SeqCst) {
         return Err(AppError::new("APP_EXITING", "应用正在退出"));
     }

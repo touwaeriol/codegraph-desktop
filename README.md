@@ -28,7 +28,7 @@ On Windows, an existing installation is updated in the same directory without un
 
 Before an update, the application is asked to stop managed CodeGraph processes and indexing tasks, then exit and release its executable files. Windows retains an exact-path process shutdown fallback for older versions. Linux DEB and macOS PKG installers wait for the application at the standard installation path to exit, and abort on timeout. DMG drag-and-drop installation and manual AppImage replacement have no pre-install hook: quit the application from its tray menu before replacing those files. Other projects' Node/CodeGraph processes are not globally terminated by name.
 
-These are installer upgrade flows. In-app automatic update downloads are not yet implemented.
+应用内自动更新已从 0.1.24 开始提供，支持启动检查、下载校验、安装与重启。0.1.23 及更早版本需先手动安装一次新版。平台范围和使用方法见[应用内更新说明](README.zh-CN.md#应用内更新)。
 
 ## Language
 

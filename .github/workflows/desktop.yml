@@ -79,6 +79,9 @@ jobs:
       - name: Build native packages
         # Manual runs validate all installers without creating a public release.
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: node scripts/build-desktop.mjs Bundle
       - name: Upload packages and checksums
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
