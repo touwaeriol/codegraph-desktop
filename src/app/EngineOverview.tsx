@@ -28,12 +28,17 @@ import { message } from "@/lib/ipc";
 import { EngineIcon } from "@/components/EngineIcon";
 
 type State = RuntimeSnapshot["state"];
+/** Sidebar marker; clicking toggles the engine for that project. */
 export function EngineMarker({
   engine,
   state,
+  configured,
+  onToggle,
 }: {
   engine: "codegraph" | "serena" | "warpgrep" | "rea";
   state?: State;
+  configured?: boolean;
+  onToggle?: () => void;
 }) {
   const labels = {
     running: t("运行中"),
@@ -48,18 +53,39 @@ export function EngineMarker({
     warpgrep: "WarpGrep",
     rea: "REA",
   }[engine];
-  const label = `${name} · ${engine === "rea" ? t("由客户端启动") : state ? labels[state] : t("尚未获取")}`;
+  const status =
+    engine === "rea"
+      ? state === "starting" || state === "stopping"
+        ? labels[state]
+        : configured
+          ? t("已注入当前客户端")
+          : t("未注入当前客户端")
+      : state
+        ? labels[state]
+        : t("尚未获取");
+  const action =
+    state === "starting" || state === "stopping"
+      ? ""
+      : state === "running"
+        ? t("点击停用")
+        : t("点击启用");
+  const label = [name, status, action].filter(Boolean).join(" · ");
   return (
-    <span
+    <button
+      type="button"
       className="sidebar-engine-marker"
       data-engine={engine}
-      data-state={engine === "rea" ? "client" : (state ?? "unknown")}
+      data-state={state ?? "unknown"}
       title={label}
-      role="img"
       aria-label={label}
+      disabled={!onToggle}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle?.();
+      }}
     >
       {{ codegraph: "C", serena: "S", warpgrep: "W", rea: "R" }[engine]}
-    </span>
+    </button>
   );
 }
 export function EngineStatus({ snapshot }: { snapshot?: { state: State } }) {
@@ -101,7 +127,6 @@ export function EngineActions({
   state,
   busy,
   disabled,
-  startLabel,
   onStart,
   onStop,
   onRestart,
@@ -110,7 +135,6 @@ export function EngineActions({
   state?: State;
   busy: boolean;
   disabled?: boolean;
-  startLabel?: string;
   onStart: () => void;
   onStop: () => void;
   onRestart: () => void;
@@ -144,7 +168,7 @@ export function EngineActions({
           ) : (
             <Play />
           )}
-          {state === "stopping" ? t("停止中") : (startLabel ?? t("启动实例"))}
+          {state === "stopping" ? t("停止中") : t("启动实例")}
         </Button>
       )}
     </div>

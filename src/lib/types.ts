@@ -36,7 +36,12 @@ export interface Settings {
   morphKeyValidatedAt?: string | null;
   indexConcurrency: number;
   closeBehavior: "tray" | "exit";
+  activeClient?: Client;
   appDataDir: string;
+}
+export interface Activation {
+  client: Client;
+  warnings: string[];
 }
 export interface Environment {
   available: boolean;

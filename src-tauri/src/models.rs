@@ -75,6 +75,8 @@ pub struct Settings {
     pub morph_key_validated_at: Option<String>,
     pub index_concurrency: usize,
     pub close_behavior: String,
+    /// Client whose project configuration one-click activation writes.
+    pub active_client: String,
     pub app_data_dir: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]

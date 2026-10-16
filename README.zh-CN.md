@@ -64,7 +64,15 @@ Windows 安装器自动使用中文或英文，不弹出语言选择窗口。mac
 
 勾选只负责客户端配置；CodeGraph、Serena 与 WarpGrep 仍需启动实例，REA 由客户端启动。配置更新后请重新加载客户端并按客户端要求批准 MCP。
 
-左侧项目名称旁以单行彩色缩写标记 MCP：C（CodeGraph）、S（Serena）、W（WarpGrep）、R（REA）。受管引擎运行时标记填充颜色，停止时淡化，异常时显示红色边框；悬停可查看完整名称与状态。REA 标记表示由客户端管理，不代表已建立连接。
+左侧项目名称旁以单行彩色缩写标记 MCP：C（CodeGraph）、S（Serena）、W（WarpGrep）、R（REA）。受管引擎运行时标记填充颜色，停止时淡化，启动或停止中闪烁，异常时显示红色边框；REA 标记填充表示已写入当前客户端配置。悬停可查看完整名称与状态。
+
+### 一键启用
+
+点击侧栏标记或项目页引擎列表右侧的开关即可一键启用：启动该项目的引擎，成功后把 MCP 写入**当前客户端**的项目配置；再次点击则停止引擎并移除该客户端的配置。REA 没有受管进程，只切换配置。当前客户端由侧栏“图标启用写入”切换（Codex / Claude Code），与 MCP 配置页顶部的客户端选择同步，并跨重启保存。启动失败时不写入配置；缺少前置条件时直接提示并提供“前往设置”：未找到 CodeGraph 或 Serena 入口（Serena 未保存入口时会先自动检测）、WarpGrep 未配置 Morph API Key、REA 找不到 `npx`。Node.js 版本不在 REA 支持范围时只提示警告，不阻止启用。
+
+项目页的四个引擎以纵向列表展示，每行显示运行状态、是否已注入当前客户端和启用开关；点击行切换下方概览、MCP 配置与运行日志。
+
+CodeGraph 启动时若项目尚未建立索引，会先自动执行 `codegraph init --yes`，完成后继续启动，过程中可取消。手动启动、一键启用、“启动全部 CodeGraph”与重启后恢复均适用；“代码索引”卡片中的同步与重建保持不变。
 
 ## Serena（可选引擎）
 
@@ -79,7 +87,7 @@ CodeGraph 与 Serena 使用相同的工作台布局和页头操作。设置页�
 
 Serena 通过 `--context ide --project <绝对路径>` 单项目模式启动原生 HTTP，每个项目使用固定独立端口 `http://127.0.0.1:<端口>/mcp`，客户端直接连接。启动检查要求存在符号工具且没有切换项目工具。端口冲突报错，不自动切换。原生 Serena 不使用 CodeGraph 的令牌，仅供本机可信客户端使用；单项目模式不是操作系统沙箱。
 
-停止 Serena 不影响 CodeGraph 或其他项目。退出应用、安装器请求退出、删除/迁移项目和“全部停止”都会回收受管 Serena 进程树。引擎运行状态会跨重启保持：桌面退出时（包括安装器更新，更新后会自动重新打开应用）正在运行的 CodeGraph、Serena 与 WarpGrep 实例，下次启动时自动恢复，记录保存在应用数据目录的 `engine-resume.json`。手动停止或启动失败的引擎会从记录中移除；项目“自动启动”设置仍用于 CodeGraph。安装包不内置 Serena，需要自行安装其入口。Serena 不会自行安装的语言服务器由桌面在启动前或检测到启动失败后自动安装（目前支持 Go 的 `gopls`），装入应用数据目录并置于 Serena 的 PATH 首位；未设置 `HTTPS_PROXY` 时使用系统代理。暂无安装方案的语言服务器会在 Serena 面板直接显示失败原因。已在 Windows 使用 Serena 1.7.0 验证原生 HTTP 和符号查询；macOS/Linux 的 Serena 运行验收与跨平台编译分别进行。
+停止 Serena 不影响 CodeGraph 或其他项目。退出应用、安装器请求退出、删除/迁移项目和“全部停止”都会回收受管 Serena 进程树。引擎运行状态会跨重启保持：桌面退出时（包括安装器更新，更新后会自动重新打开应用）正在运行的 CodeGraph、Serena 与 WarpGrep 实例，下次启动时自动恢复，记录保存在应用数据目录的 `engine-resume.json`。手动停止或启动失败的引擎会从记录中移除；项目“自动启动”设置仍用于 CodeGraph。安装包不内置 Serena，需要自行安装其入口。Serena 不会自行安装的语言服务器由桌面在启动前或检测到启动失败后自动安装（目前支持 Go 的 `gopls`），装入应用数据目录并置于 Serena 的 PATH 首位；未设置 `HTTPS_PROXY` 时使用系统代理。暂无安装方案的语言服务器会在 Serena 面板直接显示失败原因。已在 Windows 使用 Serena 1.7.0 验证原生 HTTP 和符号查询；macOS 已使用 Serena 2.0.0 验证。Serena 2 默认以 REPL 接口启动，桌面检测到其支持 `--agent-interface` 时会显式选择逐个工具接口和 LSP 后端，不修改 `~/.serena/serena_config.yml`。macOS/Linux 从 Finder 或桌面启动器打开应用时，会读取登录 Shell 的 PATH 并置于继承的 PATH 之前，使 Homebrew、npm、uv 安装的命令（如 `npx`、`go`）对引擎和 REA 测试可见。
 
 ## WarpGrep（可选引擎）
 

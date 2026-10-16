@@ -1,6 +1,11 @@
 const fs = require("node:fs");
 const readline = require("node:readline");
 
+if (process.argv.includes("init")) {
+  // Tests stage a prepared index here; the gateway needs a real database.
+  fs.renameSync(".codegraph-staged", ".codegraph");
+  process.exit(0);
+}
 if (process.argv.includes("status")) {
   console.log(JSON.stringify({
     initialized: true,

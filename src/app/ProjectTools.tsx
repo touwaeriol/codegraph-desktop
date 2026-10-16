@@ -86,6 +86,10 @@ export function ProjectTools({
   snapshot,
   tab,
   refresh,
+  client = "codex",
+  setClient = () => undefined,
+  configVersion = 0,
+  onConfigChange,
 }: {
   engine?: Engine;
   serena?: SerenaSnapshot;
@@ -95,6 +99,11 @@ export function ProjectTools({
   snapshot?: RuntimeSnapshot;
   tab: string;
   refresh: () => Promise<void>;
+  client?: Client;
+  setClient?: (client: Client) => void;
+  /** Changes when configuration was edited elsewhere, such as by activation. */
+  configVersion?: number;
+  onConfigChange?: () => void;
 }) {
   const language = useLanguage();
   const [engines, setEngines] = useState<Engine[]>(() =>
@@ -304,6 +313,10 @@ export function ProjectTools({
     return () => clearInterval(timer);
   }, [project.id, tab]);
   useEffect(() => {
+    if (configVersion && !operationBusy.current)
+      void loadStatus().catch((e) => setError(message(e)));
+  }, [configVersion]);
+  useEffect(() => {
     if (follow && tab === "logs" && filtered.length)
       virtualizer.scrollToIndex(filtered.length - 1, { align: "end" });
   }, [filtered.length, follow, tab]);
@@ -348,6 +361,7 @@ export function ProjectTools({
           await loadStatus();
         } finally {
           setPendingConfig(null);
+          onConfigChange?.();
         }
       }
     });
@@ -595,6 +609,8 @@ export function ProjectTools({
         </div>
         <McpList
           statuses={statuses}
+          client={client}
+          setClient={setClient}
           busy={busy}
           pending={pendingConfig}
           failed={failedConfig}

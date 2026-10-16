@@ -1,3 +1,4 @@
+mod activation;
 mod commands;
 mod configuration;
 mod discovery;
@@ -391,6 +392,11 @@ async fn resume_engines(app: tauri::AppHandle) {
 }
 pub fn run() {
     let update_only = lifecycle::requests_update(&std::env::args().collect::<Vec<_>>());
+    // Before any thread starts, so every engine and client probe sees it.
+    #[cfg(unix)]
+    if !update_only {
+        discovery::adopt_login_shell_path();
+    }
     let mut context = tauri::generate_context!();
     if update_only {
         for window in &mut context.config_mut().app.windows {
@@ -576,6 +582,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            activation::set_engine_enabled,
+            commands::set_active_client,
             serena::detect_serena,
             serena::get_serena_snapshot,
             serena::list_serena_snapshots,

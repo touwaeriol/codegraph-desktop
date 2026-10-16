@@ -154,6 +154,86 @@ pub fn select_with<T>(
     }
     Err(error)
 }
+const PATH_MARKER: &str = "__CODEGRAPH_DESKTOP_PATH__";
+/// GUI launches inherit launchd's minimal PATH, which hides tools installed with
+/// Homebrew, npm, uv or nvm from the app and from every engine it starts. Put the
+/// login shell's PATH ahead of the inherited one. Terminal launches already
+/// carry it, so only GUI launches pay for starting the shell.
+#[cfg(unix)]
+pub fn adopt_login_shell_path() {
+    if std::env::var_os("TERM").is_some() {
+        return;
+    }
+    let shell = std::env::var_os("SHELL")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/bin/zsh"));
+    // fish prints PATH as a list, which would not parse as a search path.
+    if shell.file_name().is_some_and(|name| name == "fish") {
+        return;
+    }
+    let Some(login) = login_shell_path(&shell) else {
+        return;
+    };
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    if let Some(path) = merge_paths(&login, &current.to_string_lossy()) {
+        std::env::set_var("PATH", path);
+    }
+}
+#[cfg(unix)]
+fn login_shell_path(shell: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut child = std::process::Command::new(shell)
+        .arg("-ilc")
+        .arg(format!(
+            "printf '%s%s%s' {PATH_MARKER} \"$PATH\" {PATH_MARKER}"
+        ))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // Stop at the closing marker: background jobs from shell startup files
+        // may keep stdout open long after the command itself finishes.
+        let mut text = String::new();
+        let mut buffer = [0; 4096];
+        while let Ok(read) = stdout.read(&mut buffer) {
+            if read == 0 {
+                break;
+            }
+            text.push_str(&String::from_utf8_lossy(&buffer[..read]));
+            if text.matches(PATH_MARKER).count() >= 2 {
+                break;
+            }
+        }
+        let _ = send.send(text);
+    });
+    let text = receive.recv_timeout(std::time::Duration::from_secs(5)).ok();
+    let _ = child.kill();
+    let _ = child.wait();
+    extract_path(&text?)
+}
+fn extract_path(output: &str) -> Option<String> {
+    let mut parts = output.split(PATH_MARKER);
+    parts.next()?;
+    let path = parts.next()?;
+    parts.next()?;
+    Some(path.to_owned())
+}
+/// Login shell entries first, then inherited ones; drops duplicates and
+/// anything that is not an absolute directory path.
+fn merge_paths(login: &str, current: &str) -> Option<String> {
+    let mut seen = HashSet::new();
+    let merged: Vec<&str> = login
+        .split(':')
+        .chain(current.split(':'))
+        .filter(|entry| entry.starts_with('/') && seen.insert(*entry))
+        .collect();
+    (!merged.is_empty()).then(|| merged.join(":"))
+}
 pub fn persist_detected(
     db: &mut rusqlite::Connection,
     expected: Option<&str>,
@@ -192,6 +272,20 @@ pub fn clear_cli_index_error(snapshot: &mut RuntimeSnapshot) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn login_shell_path_comes_first_without_duplicates_or_noise() {
+        let output = format!(
+            "Last login: today\n{PATH_MARKER}/opt/homebrew/bin:/usr/bin:relative:{PATH_MARKER}"
+        );
+        let login = extract_path(&output).unwrap();
+        assert_eq!(login, "/opt/homebrew/bin:/usr/bin:relative:");
+        assert_eq!(
+            merge_paths(&login, "/usr/bin:/bin").unwrap(),
+            "/opt/homebrew/bin:/usr/bin:/bin"
+        );
+        assert!(extract_path(&format!("{PATH_MARKER}/usr/bin")).is_none());
+        assert!(merge_paths("", "").is_none());
+    }
     #[test]
     fn successful_detection_clears_only_stopped_cli_index_errors() {
         let mut snapshot = RuntimeSnapshot::new("project");

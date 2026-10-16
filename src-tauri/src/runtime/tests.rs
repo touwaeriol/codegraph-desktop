@@ -330,6 +330,35 @@ async fn failed_recovery_can_be_retried_without_stale_registration() {
 }
 
 #[tokio::test]
+async fn start_initializes_a_missing_index_before_starting() {
+    let fixture = Fixture::new();
+    let project = fixture.project();
+    let index = Path::new(&project.canonical_path).join(".codegraph");
+    std::fs::rename(
+        &index,
+        Path::new(&project.canonical_path).join(".codegraph-staged"),
+    )
+    .unwrap();
+    let cancel = AtomicBool::new(false);
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        initialize_and_start(fixture.app.handle(), &fixture.state, &project.id, &cancel),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(index.is_dir());
+    assert_eq!(fixture.state.snapshot(&project.id).index_state, "ready");
+    fixture.assert_running(&project.id).await;
+    // An indexed, running project starts without initializing again.
+    initialize_and_start(fixture.app.handle(), &fixture.state, &project.id, &cancel)
+        .await
+        .unwrap();
+    fixture.assert_running(&project.id).await;
+    fixture.stop(&project.id).await;
+}
+
+#[tokio::test]
 async fn dead_gateway_uses_current_binding_but_live_gateway_requires_explicit_restart() {
     let fixture = Fixture::new();
     let project = fixture.project();

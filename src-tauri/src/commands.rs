@@ -142,8 +142,23 @@ pub fn settings(state: &AppState) -> Result<Settings> {
             .unwrap_or(2),
         close_behavior: persistence::setting(&db, "closeBehavior")?
             .unwrap_or_else(|| "tray".into()),
+        active_client: persistence::setting(&db, "activeClient")?
+            .filter(|client| CLIENTS.contains(&client.as_str()))
+            .unwrap_or_else(|| "codex".into()),
         app_data_dir: state.data.to_string_lossy().into(),
     })
+}
+const CLIENTS: [&str; 2] = ["codex", "claude"];
+#[tauri::command]
+pub fn set_active_client(state: State<AppState>, client: String) -> Result<Settings> {
+    if !CLIENTS.contains(&client.as_str()) {
+        return Err(AppError::new(
+            "INVALID_CLIENT",
+            crate::i18n::tr("不支持的客户端", "Unknown client"),
+        ));
+    }
+    persistence::set_setting(&state.db.lock().unwrap(), "activeClient", &client)?;
+    settings(&state)
 }
 #[tauri::command]
 pub fn save_settings(
@@ -428,7 +443,7 @@ fn managed_key(engine: &str, client: &str) -> String {
     }
 }
 fn managed_client(engine: &str, key: &str) -> Option<String> {
-    ["codex", "claude"]
+    CLIENTS
         .into_iter()
         .find(|client| managed_key(engine, client) == key)
         .map(str::to_string)

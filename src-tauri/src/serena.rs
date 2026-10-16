@@ -166,6 +166,26 @@ pub async fn detect_serena(
     state: State<'_, AppState>,
     selected_path: Option<String>,
 ) -> Result<Environment> {
+    detect(&state, selected_path).await
+}
+/// Checks the saved Serena entry, detecting and saving one first when none
+/// has been saved yet.
+pub async fn ensure_entry(state: &AppState) -> Result<()> {
+    let saved = persistence::setting(&state.db.lock().unwrap(), "serenaEntry")?;
+    if let Some(saved) = saved {
+        return validate_entry(Path::new(&saved)).map(|_| ());
+    }
+    let environment = detect(state, None).await?;
+    if environment.available {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            "SERENA_MISSING",
+            environment.error.unwrap_or_default(),
+        ))
+    }
+}
+async fn detect(state: &AppState, selected_path: Option<String>) -> Result<Environment> {
     let saved = persistence::setting(&state.db.lock().unwrap(), "serenaEntry")?;
     let requested = selected_path.filter(|s| !s.trim().is_empty());
     let paths = candidates(requested.or(saved.clone()));
@@ -332,7 +352,21 @@ fn search_path(entry: &Path, servers: &Path) -> OsString {
     ));
     std::env::join_paths(paths).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
 }
-fn server_command(entry: &Path, root: &Path, port: &str, context: &Path, path: &OsStr) -> Command {
+/// Serena 2 defaults new installs to the REPL interface, which replaces the
+/// individual LSP tools with `serena_repl`; such versions accept overrides.
+async fn selects_interface(entry: &Path) -> Result<bool> {
+    Ok(output(entry, &["start-mcp-server", "--help"])
+        .await?
+        .contains("--agent-interface"))
+}
+fn server_command(
+    entry: &Path,
+    root: &Path,
+    port: &str,
+    context: &Path,
+    path: &OsStr,
+    select_interface: bool,
+) -> Command {
     let mut command = Command::new(entry);
     command.env("PATH", path);
     command.env("PYTHONIOENCODING", "utf-8");
@@ -349,7 +383,11 @@ fn server_command(entry: &Path, root: &Path, port: &str, context: &Path, path: &
         ])
         .arg(context)
         .arg("--project")
-        .arg(root)
+        .arg(root);
+    if select_interface {
+        command.args(["--agent-interface", "tools", "--language-backend", "LSP"]);
+    }
+    command
         .args([
             "--enable-web-dashboard",
             "false",
@@ -382,6 +420,7 @@ fn environment(state: &AppState, id: &str) -> Result<(PathBuf, PathBuf, OsString
 async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()> {
     let (root, entry, path) = environment(state, id)?;
     language_servers::ensure(app, id, &root, &path, &language_servers::configured(&root)).await?;
+    let select_interface = selects_interface(&entry).await?;
     let target = binding(state, id)?;
     let address = target
         .endpoint
@@ -392,7 +431,14 @@ async fn start(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<()>
         std::net::TcpListener::bind(address).map_err(|e| AppError::new("SERENA_PORT_BUSY", e))?;
     let port = reservation.local_addr()?.port().to_string();
     let context = lsp_context()?;
-    let mut command = server_command(&entry, &root, &port, context.path(), &path);
+    let mut command = server_command(
+        &entry,
+        &root,
+        &port,
+        context.path(),
+        &path,
+        select_interface,
+    );
     drop(reservation);
     let (mut child, job) = project_gateway::spawn_owned(&mut command)
         .map_err(|e| AppError::new("SERENA_START_FAILED", e))?;
@@ -697,6 +743,7 @@ mod tests {
         let root = dunce::canonicalize(temp.path()).unwrap();
         let mut instances = vec![];
         let mut endpoints = vec![];
+        let select_interface = selects_interface(&entry).await.unwrap();
         for marker in ["serena_fixture_alpha", "serena_fixture_beta"] {
             let project = root.join(marker);
             std::fs::create_dir_all(project.join(".serena")).unwrap();
@@ -715,7 +762,14 @@ mod tests {
             let endpoint = format!("http://127.0.0.1:{port}/mcp");
             let context = lsp_context().unwrap();
             let path = search_path(&entry, &root.join("language-servers"));
-            let mut command = server_command(&entry, &project, &port, context.path(), &path);
+            let mut command = server_command(
+                &entry,
+                &project,
+                &port,
+                context.path(),
+                &path,
+                select_interface,
+            );
             command
                 .env("SERENA_HOME", root.join("serena-home"))
                 .stdout(Stdio::null())
@@ -815,11 +869,27 @@ mod tests {
             "12345",
             context.path(),
             OsStr::new("bin"),
+            true,
         );
         let args: Vec<_> = command.as_std().get_args().collect();
         assert!(args
             .windows(2)
             .any(|pair| pair[0] == "--context" && pair[1] == context.path().as_os_str()));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--agent-interface" && pair[1] == "tools"));
+        let legacy = server_command(
+            Path::new("serena"),
+            Path::new("project"),
+            "12345",
+            context.path(),
+            OsStr::new("bin"),
+            false,
+        );
+        assert!(!legacy
+            .as_std()
+            .get_args()
+            .any(|arg| arg == "--agent-interface"));
     }
     #[test]
     fn rejects_non_lsp_tools_and_unrelated_servers() {

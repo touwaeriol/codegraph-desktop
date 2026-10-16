@@ -62,6 +62,7 @@ import {
 import { call, desktop, message, subscribe } from "@/lib/ipc";
 import { ExternalLink } from "@/components/ExternalLink";
 import type {
+  Client,
   Engine,
   Environment,
   Project,
@@ -69,6 +70,7 @@ import type {
   Settings,
   TaskProgress,
 } from "@/lib/types";
+import { ClientSwitch, EngineList, useActivation } from "./Activation";
 import { SerenaPanel, SerenaSettings, useSerena } from "./Serena";
 import { ReaPanel, ReaSettings } from "./Rea";
 import { WarpGrepPanel, WarpGrepSettings, useWarpGrep } from "./WarpGrep";
@@ -83,7 +85,6 @@ import {
   EngineMarker,
   Metric,
 } from "./EngineOverview";
-import { EngineIcon } from "@/components/EngineIcon";
 import packageInfo from "../../package.json";
 
 const indexNames = () => ({
@@ -265,6 +266,29 @@ export default function App() {
       if (request === refreshRequest.current) setLoading(false);
     }
   }, []);
+  const client: Client = settings?.activeClient ?? "codex";
+  async function changeClient(next: Client) {
+    if (next === client) return;
+    setSettings((old) => (old ? { ...old, activeClient: next } : old));
+    try {
+      setSettings(await call<Settings>("set_active_client", { client: next }));
+    } catch (e) {
+      toast.error(message(e));
+      await refresh();
+    }
+  }
+  const activation = useActivation({
+    projects,
+    client,
+    codegraph: snapshots,
+    serena: serena.snapshots,
+    warpgrep: warpgrep.snapshots,
+    refresh: async () => {
+      await Promise.all([refresh(), serena.refresh(), warpgrep.refresh()]);
+    },
+    openSettings,
+    confirm: setConfirm,
+  });
   useEffect(() => {
     if (!desktop) return;
     let disposed = false;
@@ -585,50 +609,72 @@ export default function App() {
                 <option value="recent">{t("最近更新")}</option>
               </select>
             </div>
+            <div className="sidebar-client">
+              <span>{t("图标启用写入")}</span>
+              <ClientSwitch
+                client={client}
+                onChange={(next) => void changeClient(next)}
+                disabled={!desktop || !settings}
+                label={t("图标启用写入的客户端")}
+              />
+            </div>
           </div>
           <nav className="project-list" aria-label={t("项目列表")}>
-            {displayed.map((p) => (
-              <button
-                key={p.id}
-                className={`project-row ${p.id === selected ? "selected" : ""}`}
-                onClick={() => {
-                  navigate("project");
-                  setSelected(p.id);
-                  setError("");
-                }}
-              >
-                <div className="sidebar-project-heading">
-                  <Folder size={14} className="shrink-0" />
-                  <span
-                    className="truncate font-medium flex-1 min-w-0"
-                    title={p.name}
-                  >
-                    {p.name}
-                  </span>
-                  <span className="sidebar-engine-states">
-                    <EngineMarker
-                      engine="codegraph"
-                      state={snapshots[p.id]?.state}
-                    />
-                    <EngineMarker
-                      engine="serena"
-                      state={serena.snapshots[p.id]?.state ?? "stopped"}
-                    />
-                    <EngineMarker
-                      engine="warpgrep"
-                      state={warpgrep.snapshots[p.id]?.state ?? "stopped"}
-                    />
-                    <EngineMarker engine="rea" />
-                  </span>
-                </div>
+            {displayed.map((p) => {
+              const choose = () => {
+                navigate("project");
+                setSelected(p.id);
+                setError("");
+              };
+              return (
                 <div
-                  className="mono text-[11px] text-muted-foreground truncate mt-2"
-                  title={p.rootPath}
+                  key={p.id}
+                  className={`project-row ${p.id === selected ? "selected" : ""}`}
+                  onClick={choose}
                 >
-                  {p.rootPath}
+                  <div className="sidebar-project-heading">
+                    <Folder size={14} className="shrink-0" />
+                    <button
+                      type="button"
+                      className="project-row-name truncate font-medium flex-1 min-w-0"
+                      title={p.name}
+                      aria-current={p.id === selected ? "true" : undefined}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        choose();
+                      }}
+                    >
+                      {p.name}
+                    </button>
+                    <span className="sidebar-engine-states">
+                      {(
+                        ["codegraph", "serena", "warpgrep", "rea"] as const
+                      ).map((value) => (
+                        <EngineMarker
+                          key={value}
+                          engine={value}
+                          state={activation.stateOf(p.id, value)}
+                          configured={
+                            activation.configured(p.id, value) === "configured"
+                          }
+                          onToggle={
+                            desktop
+                              ? () => activation.toggle(p, value)
+                              : undefined
+                          }
+                        />
+                      ))}
+                    </span>
+                  </div>
+                  <div
+                    className="mono text-[11px] text-muted-foreground truncate mt-2"
+                    title={p.rootPath}
+                  >
+                    {p.rootPath}
+                  </div>
                 </div>
-              </button>
-            ))}
+              );
+            })}
             {!loading && !displayed.length && (
               <p className="text-xs text-muted-foreground px-3 py-6">
                 {query ? t("没有匹配的项目") : t("项目会显示在这里")}
@@ -844,16 +890,8 @@ export default function App() {
                             ? auxiliary.disabled
                             : !environment?.available
                         }
-                        startLabel={
-                          engine === "codegraph" &&
-                          snapshot?.indexState === "missing"
-                            ? t("初始化索引")
-                            : undefined
-                        }
                         onStart={() => {
                           if (auxiliary) auxiliary.run("start");
-                          else if (snapshot?.indexState === "missing")
-                            void indexing("init");
                           else void runtime("start");
                         }}
                         onStop={() => {
@@ -931,76 +969,16 @@ export default function App() {
                         </AlertDescription>
                       </Alert>
                     )}
-                  <div
-                    className="engine-picker"
-                    role="group"
-                    aria-label={t("项目引擎")}
-                  >
-                    <button
-                      aria-pressed={engine === "codegraph"}
-                      onClick={() => {
-                        setEngine("codegraph");
-                        changeTab("overview");
-                      }}
-                    >
-                      <span className="engine-symbol">
-                        <EngineIcon engine="codegraph" />
-                      </span>
-                      <span>
-                        <strong>CodeGraph</strong>
-                        <small>{t("代码图谱与关系检索")}</small>
-                      </span>
-                      <Status snapshot={snapshot} />
-                    </button>
-                    <button
-                      aria-pressed={engine === "serena"}
-                      onClick={() => {
-                        setEngine("serena");
-                        changeTab("overview");
-                      }}
-                    >
-                      <span className="engine-symbol">
-                        <EngineIcon engine="serena" />
-                      </span>
-                      <span>
-                        <strong>Serena</strong>
-                        <small>{t("LSP 查询与诊断")}</small>
-                      </span>
-                      <Status snapshot={serena.snapshot} />
-                    </button>
-                    <button
-                      aria-pressed={engine === "warpgrep"}
-                      onClick={() => {
-                        setEngine("warpgrep");
-                        changeTab("overview");
-                      }}
-                    >
-                      <span className="engine-symbol">
-                        <EngineIcon engine="warpgrep" />
-                      </span>
-                      <span>
-                        <strong>WarpGrep</strong>
-                        <small>{t("自然语言代码检索")}</small>
-                      </span>
-                      <Status snapshot={warpgrep.snapshot} />
-                    </button>
-                    <button
-                      aria-pressed={engine === "rea"}
-                      onClick={() => {
-                        setEngine("rea");
-                        changeTab("overview");
-                      }}
-                    >
-                      <span className="engine-symbol">
-                        <EngineIcon engine="rea" />
-                      </span>
-                      <span>
-                        <strong>REA</strong>
-                        <small>{t("应用与二进制逆向分析")}</small>
-                      </span>
-                      <Badge variant="secondary">{t("由客户端启动")}</Badge>
-                    </button>
-                  </div>
+                  <EngineList
+                    project={project}
+                    engine={engine}
+                    client={client}
+                    activation={activation}
+                    select={(value) => {
+                      setEngine(value);
+                      changeTab("overview");
+                    }}
+                  />
                   <Tabs value={tab} onValueChange={changeTab}>
                     <TabsList className="mb-5">
                       <TabsTrigger value="overview">{t("概览")}</TabsTrigger>
@@ -1164,6 +1142,12 @@ export default function App() {
                       snapshot={snapshot}
                       tab={tab}
                       refresh={refresh}
+                      client={client}
+                      setClient={(next) => void changeClient(next)}
+                      configVersion={activation.version}
+                      onConfigChange={() =>
+                        void activation.reloadConfig(project.id)
+                      }
                     />
                   </Tabs>
                   {batch.length > 0 && (

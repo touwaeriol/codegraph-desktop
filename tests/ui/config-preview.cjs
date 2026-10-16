@@ -30,6 +30,7 @@ const fs = require("node:fs");
         rejectToggle: false,
         partialToggle: false,
         failStatuses: false,
+        activeClient: "codex",
       };
       const project = {
         id: "11111111-1111-4111-8111-111111111111",
@@ -73,14 +74,19 @@ const fs = require("node:fs");
               error: null,
             };
           if (command === "list_projects") return [project];
-          if (command === "get_settings")
-            return {
-              language: "zh-CN",
-              codegraphEntry: null,
-              indexConcurrency: 1,
-              closeBehavior: "tray",
-              appDataDir: "D:\\fixture-data",
-            };
+          const settings = () => ({
+            language: "zh-CN",
+            codegraphEntry: null,
+            indexConcurrency: 1,
+            closeBehavior: "tray",
+            activeClient: window.__uiTest.activeClient,
+            appDataDir: "D:\\fixture-data",
+          });
+          if (command === "get_settings") return settings();
+          if (command === "set_active_client") {
+            window.__uiTest.activeClient = args.client;
+            return settings();
+          }
           if (command === "detect_codegraph")
             return {
               available: true,

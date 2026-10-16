@@ -33,6 +33,60 @@ fn binding_for_platform(windows: bool) -> Target {
     }
 }
 
+/// Checks the runtime clients use to launch REA. A missing npx blocks
+/// activation; a Node.js version REA does not list only warns, since the
+/// client may launch REA with a different Node.js.
+pub async fn check_runtime() -> Result<Vec<String>> {
+    let zh = crate::i18n::current() == "zh-CN";
+    which::which("npx").map_err(|_| {
+        AppError::new(
+            crate::activation::ENVIRONMENT_REQUIRED,
+            crate::i18n::tr(
+                "REA 需要 npx，请先安装 Node.js（例如 brew install node）",
+                "REA needs npx. Install Node.js first (for example, brew install node)",
+            ),
+        )
+    })?;
+    let mut command = tokio::process::Command::new("node");
+    command
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    let version = tokio::time::timeout(Duration::from_secs(15), command.output())
+        .await
+        .ok()
+        .and_then(|output| output.ok())
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .unwrap_or_default();
+    if supported_node(&version) {
+        return Ok(vec![]);
+    }
+    let version = if version.is_empty() { "?" } else { &version };
+    Ok(vec![if zh {
+        format!("当前 Node.js {version} 不在 REA 支持范围（22.19+、24.11+ 或 26+），如遇问题请升级")
+    } else {
+        format!("Node.js {version} is outside REA's supported range (22.19+, 24.11+ or 26+). Upgrade if REA fails")
+    }])
+}
+fn supported_node(version: &str) -> bool {
+    let version = version.trim().trim_start_matches('v');
+    if version.contains('-') {
+        return false;
+    }
+    let mut parts = version.split('.').map(|part| part.parse::<u32>().ok());
+    let (Some(Some(major)), Some(Some(minor))) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    match major {
+        22 => minor >= 19,
+        24 => minor >= 11,
+        major => major >= 26,
+    }
+}
+
 pub async fn probe(state: &AppState, project: Project) -> Result<Vec<String>> {
     let root = persistence::canonical(&project.canonical_path)?;
     let target = binding().stdio.unwrap();
@@ -66,6 +120,23 @@ pub async fn probe(state: &AppState, project: Project) -> Result<Vec<String>> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn node_versions_follow_rea_support_policy() {
+        for version in ["v22.19.0", "v24.11.1", "v26.12.0", "v27.0.0"] {
+            assert!(supported_node(version), "{version}");
+        }
+        for version in [
+            "v22.18.0",
+            "v23.11.0",
+            "v24.2.0",
+            "v25.1.0",
+            "v26.0.0-rc.1",
+            "",
+            "garbage",
+        ] {
+            assert!(!supported_node(version), "{version}");
+        }
+    }
     #[test]
     fn package_runner_is_pinned_and_wraps_windows_shims() {
         let unix = binding_for_platform(false).stdio.unwrap();

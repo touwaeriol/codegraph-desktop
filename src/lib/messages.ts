@@ -484,5 +484,23 @@ export const english = {
     "Select several MCPs to preview and apply them together in the selected clients' project configuration.",
   "在 MCP 配置中勾选需要的 MCP（CodeGraph、Serena、WarpGrep），选择客户端，预览并应用后重新加载客户端。使用前分别启动所需实例。":
     "Select the MCPs you need (CodeGraph, Serena, WarpGrep) in MCP configuration, choose your clients, preview and apply, then reload the clients. Start each required engine before use.",
+  "{0} 已启用，并写入 {1} 项目配置；请在客户端重新加载 MCP":
+    "{0} is enabled and added to the {1} project configuration. Reload MCP in the client",
+  "{0} 已停用，并移除 {1} 项目配置":
+    "{0} is disabled and removed from the {1} project configuration",
+  "{0}：{1}": "{0}: {1}",
+  "启用 {0} 失败": "Could not enable {0}",
+  "停用 {0} 失败": "Could not disable {0}",
+  "启用 {0}": "Enable {0}",
+  "停用 {0}": "Disable {0}",
+  "已注入 {0}": "In {0}",
+  "未注入 {0}": "Not in {0}",
+  "当前客户端：{0}": "Current client: {0}",
+  已注入当前客户端: "Added to the current client",
+  未注入当前客户端: "Not in the current client",
+  点击停用: "Click to disable",
+  点击启用: "Click to enable",
+  图标启用写入: "Icons enable in",
+  图标启用写入的客户端: "Client that engine icons enable MCP in",
 } as const;
 export type MessageKey = keyof typeof english;

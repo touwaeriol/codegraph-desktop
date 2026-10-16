@@ -98,6 +98,28 @@ pre,
   border-radius: 8px;
   padding: 13px 11px;
   margin-bottom: 5px;
+  cursor: pointer;
+}
+.project-row-name {
+  text-align: left;
+  border-radius: 4px;
+}
+.project-row-name:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.sidebar-client {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: #6b7280;
+  font-size: 11px;
+}
+.sidebar-client .mcp-client-picker button {
+  padding: 3px 8px;
+  font-size: 11px;
 }
 .project-row:hover {
   background: #e7eaef;
@@ -208,14 +230,29 @@ pre,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   border-radius: 5px;
   background: color-mix(in srgb, var(--engine-color) 12%, white);
   color: var(--engine-color);
   font-size: 9px;
   font-weight: 700;
   line-height: 1;
+  cursor: pointer;
+  transition:
+    opacity 0.15s,
+    transform 0.1s;
+}
+.sidebar-engine-marker:hover:not(:disabled) {
+  opacity: 1;
+  transform: scale(1.12);
+}
+.sidebar-engine-marker:focus-visible {
+  outline: 2px solid var(--engine-color);
+  outline-offset: 1px;
+}
+.sidebar-engine-marker:disabled {
+  cursor: default;
 }
 .sidebar-engine-marker[data-engine="serena"] {
   --engine-color: #ba680c;
@@ -237,6 +274,13 @@ pre,
 .sidebar-engine-marker[data-state="starting"],
 .sidebar-engine-marker[data-state="stopping"] {
   box-shadow: inset 0 0 0 1px #d99b2d;
+  animation: engine-marker-pulse 1s ease-in-out infinite;
+  cursor: progress;
+}
+@keyframes engine-marker-pulse {
+  50% {
+    opacity: 0.45;
+  }
 }
 .sidebar-engine-marker[data-state="error"] {
   box-shadow: inset 0 0 0 1.5px #dc3a47;
@@ -407,41 +451,65 @@ pre,
 .engine-overview .metrics {
   row-gap: 24px;
 }
-.engine-picker {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+.engine-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin-bottom: 24px;
 }
-.engine-picker > button {
+.engine-list-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px;
+  gap: 14px;
+  padding: 8px 16px 8px 8px;
   border: 1px solid var(--color-border);
   border-radius: 12px;
-  text-align: left;
   background: white;
   min-width: 0;
 }
-.engine-picker > button[aria-pressed="true"] {
+.engine-list-row[data-selected="true"] {
   border-color: var(--primary);
   box-shadow: 0 0 0 1px var(--primary);
   background: #f7fcf9;
 }
-.engine-picker strong {
+.engine-list-select {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  text-align: left;
+}
+.engine-list-select:focus-visible {
+  outline: 2px solid var(--primary);
+}
+.engine-list-select strong {
   display: block;
   font-size: 15px;
 }
-.engine-picker small {
+.engine-list-select small {
   display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #5d6876;
   font-size: 12px;
   margin-top: 3px;
 }
-.engine-picker [data-slot="badge"] {
-  margin-left: auto;
+.engine-list-row [data-slot="badge"] {
   flex-shrink: 0;
+}
+.engine-list-config {
+  flex-shrink: 0;
+  min-width: 96px;
+  color: #8a929d;
+  font-size: 12px;
+  text-align: right;
+}
+.engine-list-config[data-configured="true"] {
+  color: #176b52;
 }
 .engine-symbol {
   display: inline-flex;
@@ -475,12 +543,8 @@ pre,
   font-size: 12px;
 }
 @media (max-width: 1080px) {
-  .engine-picker > button {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .engine-picker small {
-    font-size: 11px;
+  .engine-list-config {
+    display: none;
   }
 }
 .panel-grid {
@@ -581,8 +645,8 @@ pre,
   .metrics {
     grid-template-columns: 1fr;
   }
-  .engine-picker {
-    grid-template-columns: 1fr;
+  .engine-list-select small {
+    display: none;
   }
   .engine-header-status {
     gap: 8px;

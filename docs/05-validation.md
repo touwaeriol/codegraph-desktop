@@ -2,6 +2,15 @@
 
 日期：2026-10-03。本文件区分已运行检查和仍待完成的发布验收；设计文档中的性能预算不视为测量结果。
 
+## 0.1.26 一键启用与环境兼容（2026-10-17）
+
+- 侧栏 C / S / W / R 标记和项目页引擎列表开关可一键启用：启动引擎、等待就绪后写入当前客户端的项目配置；停用时停止引擎并移除配置。REA 只切换配置。当前客户端改为全局偏好，侧栏与 MCP 配置页同步。
+- 缺少前置条件时返回 `ENVIRONMENT_REQUIRED` 并在界面提供“前往设置”：CodeGraph / Serena 入口（Serena 未保存入口时先自动检测）、Morph API Key、REA 所需 `npx`。Node.js 版本不在 REA 支持范围只警告。
+- CodeGraph 启动时若项目没有索引，先执行 `init --yes` 再启动，适用于手动启动、一键启用、批量启动和重启恢复。Rust 回归使用假 CLI 验证自动初始化后网关握手成功、已有索引时不重复初始化。
+- Serena 2.0 默认 REPL 接口只暴露 `serena_repl`；入口支持 `--agent-interface` 时显式选择逐个工具接口与 LSP 后端。本机使用 Serena 2.0.0 运行原生 HTTP 集成测试（符号查询、禁用工具拦截、进程回收）通过。
+- macOS/Linux 从 Finder 或桌面启动器打开时读取登录 Shell 的 PATH，使 Homebrew / npm / uv 安装的命令对引擎和 REA 测试可见；读取有 5 秒超时，失败时保留原 PATH。
+- 本机 Rust 工作区测试、Clippy、格式检查、TypeScript 检查通过；浏览器模拟 IPC 回归新增 `tests/ui/activation.cjs`，并通过 `config-preview`、`serena`、`environment-detection`。`language.cjs` 在本次改动前已失败，未在本版本处理。真实桌面应用中的点击流程尚待安装后验收。
+
 ## 0.1.25 macOS 应用资源签名（2026-10-16）
 
 - 用户下载的 0.1.24 DMG / PKG 与官方 SHA256 一致，但 `.app` 的 `codesign --verify --deep --strict` 报错 `code has no resources but signature indicates they must be present`。此前主程序只有链接器生成的签名，没有完整的应用资源封印。

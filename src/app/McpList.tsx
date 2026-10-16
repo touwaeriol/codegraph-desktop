@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Loader2, MoreHorizontal, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,6 +23,8 @@ export type McpChange = { engine: Engine; client: Client; enabled: boolean };
 
 export function McpList({
   statuses,
+  client,
+  setClient,
   busy,
   pending,
   failed,
@@ -34,6 +35,8 @@ export function McpList({
   review,
 }: {
   statuses: McpStatus[];
+  client: Client;
+  setClient: (client: Client) => void;
   busy: boolean;
   pending: McpChange | null;
   failed: McpChange | null;
@@ -43,7 +46,6 @@ export function McpList({
   probe: (engine: Engine) => void;
   review: (engine: Engine, client: Client) => void;
 }) {
-  const [client, setClient] = useState<Client>("codex");
   const clientName = client === "codex" ? "Codex" : "Claude Code";
   const clientStatuses = statuses.filter((status) => status.client === client);
   const configured = clientStatuses.filter(

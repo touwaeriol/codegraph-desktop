@@ -233,12 +233,13 @@ pub async fn stop<R: tauri::Runtime>(
     }
     Ok(())
 }
-async fn index(
-    app: &tauri::AppHandle,
+async fn index<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     state: &AppState,
     id: &str,
     kind: &str,
     cancel: &AtomicBool,
+    then_start: bool,
 ) -> Result<()> {
     struct IndexPermit<'a>(&'a std::sync::atomic::AtomicUsize);
     impl Drop for IndexPermit<'_> {
@@ -300,6 +301,9 @@ async fn index(
     let mut err_open = true;
     let mut s = state.snapshot(id);
     s.index_state = "indexing".into();
+    if then_start {
+        s.state = "starting".into();
+    }
     s.error = None;
     state.publish(app, s.clone());
     let mut ticker = tokio::time::interval(Duration::from_millis(100));
@@ -355,13 +359,45 @@ async fn index(
     s.error = result.as_ref().err().cloned();
     state.publish(app, s);
     result?;
-    if was_running && !cancel.load(Ordering::SeqCst) && !state.quitting.load(Ordering::SeqCst) {
+    if (was_running || then_start)
+        && !cancel.load(Ordering::SeqCst)
+        && !state.quitting.load(Ordering::SeqCst)
+    {
         start(app, state, id).await?;
     }
     Ok(())
 }
-async fn cancellable_start(
-    app: &tauri::AppHandle,
+/// Starts CodeGraph, building the index first when the project has none, so a
+/// new project needs a single action.
+async fn initialize_and_start<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &AppState,
+    id: &str,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let running = state
+        .gateways
+        .lock()
+        .await
+        .get(id)
+        .is_some_and(|g| g.is_alive());
+    if !running && status(state, &state.project(id)?).await? == "missing" {
+        state.log(
+            app,
+            id,
+            "info",
+            "index",
+            crate::i18n::tr(
+                "项目尚未建立索引，启动前自动初始化",
+                "The project has no index yet; initializing it before starting",
+            ),
+        );
+        return index(app, state, id, "init", cancel, true).await;
+    }
+    cancellable_start(app, state, id, cancel).await
+}
+async fn cancellable_start<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     state: &AppState,
     id: &str,
     cancel: &AtomicBool,
@@ -387,13 +423,13 @@ pub fn launch_operation(app: tauri::AppHandle, id: String, kind: String) -> Resu
             Err(AppError::new("TASK_CANCELLED", "任务已取消"))
         } else {
             match kind.as_str() {
-                "start" => cancellable_start(&app, &state, &id, &cancel).await,
+                "start" => initialize_and_start(&app, &state, &id, &cancel).await,
                 "stop" => stop(&app, &state, &id).await,
                 "restart" => match stop(&app, &state, &id).await {
-                    Ok(()) => cancellable_start(&app, &state, &id, &cancel).await,
+                    Ok(()) => initialize_and_start(&app, &state, &id, &cancel).await,
                     Err(e) => Err(e),
                 },
-                _ => index(&app, &state, &id, &kind, &cancel).await,
+                _ => index(&app, &state, &id, &kind, &cancel, false).await,
             }
         };
         match kind.as_str() {
