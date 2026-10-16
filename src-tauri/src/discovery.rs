@@ -154,6 +154,7 @@ pub fn select_with<T>(
     }
     Err(error)
 }
+#[cfg(any(unix, test))]
 const PATH_MARKER: &str = "__CODEGRAPH_DESKTOP_PATH__";
 /// GUI launches inherit launchd's minimal PATH, which hides tools installed with
 /// Homebrew, npm, uv or nvm from the app and from every engine it starts. Put the
@@ -216,6 +217,7 @@ fn login_shell_path(shell: &Path) -> Option<String> {
     let _ = child.wait();
     extract_path(&text?)
 }
+#[cfg(any(unix, test))]
 fn extract_path(output: &str) -> Option<String> {
     let mut parts = output.split(PATH_MARKER);
     parts.next()?;
@@ -225,6 +227,7 @@ fn extract_path(output: &str) -> Option<String> {
 }
 /// Login shell entries first, then inherited ones; drops duplicates and
 /// anything that is not an absolute directory path.
+#[cfg(any(unix, test))]
 fn merge_paths(login: &str, current: &str) -> Option<String> {
     let mut seen = HashSet::new();
     let merged: Vec<&str> = login
