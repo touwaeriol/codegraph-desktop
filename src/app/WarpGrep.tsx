@@ -21,6 +21,7 @@ import {
   EngineSettingsCard,
   Metric,
 } from "./EngineOverview";
+import { EngineTools } from "./EngineTools";
 import { t, useLanguage } from "@/lib/i18n";
 import type { Settings, WarpGrepSnapshot } from "@/lib/types";
 
@@ -287,6 +288,7 @@ export function WarpGrepSettings({
             {t("WarpGrep 文档 ↗")}
           </ExternalLink>
         </details>
+        <EngineTools engine="warpgrep" />
       </Field>
     </EngineSettingsCard>
   );

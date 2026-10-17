@@ -61,10 +61,10 @@ export const english = {
     "Configure the selected MCPs for this project. Clients launch REA; other engines use desktop-managed instances.",
   "REA 需要 Node.js 22.19+（22.x）、24.11+（24.x）或 26+，以及 PATH 中的 npm / npx；不支持 Node.js 23、25 和预发布版本。":
     "REA requires Node.js 22.x (22.19+), 24.x (24.11+), or 26+, with npm / npx on PATH. Node.js 23, 25, and prereleases are unsupported.",
-  "JavaScript / Electron 和 .NET 静态分析无需原生反编译器；深度原生分析需自行配置 Hopper、Ghidra 或 IDA 等工具。":
-    "Static JavaScript / Electron and .NET analysis needs no native decompiler. Deep native analysis requires tools such as Hopper, Ghidra, or IDA.",
-  "首次启动或测试会通过 npx 下载固定版本的 rea-agents，需要访问 npm registry。分析工具及其许可证由用户自行准备。":
-    "The first launch or test downloads a pinned rea-agents version through npx and requires npm registry access. Supply analysis tools and their licenses separately.",
+  "JavaScript / Electron 和 .NET 静态分析无需原生反编译器；深度原生分析可在设置中一键安装 Ghidra，或自行配置 Hopper、IDA。":
+    "Static JavaScript / Electron and .NET analysis needs no native decompiler. For deep native analysis, install Ghidra from Settings or configure Hopper or IDA yourself.",
+  "首次启动或测试会通过 npx 下载固定版本的 rea-agents，需要访问 npm registry。Ghidra、JADX 等可在设置中一键安装，商业工具及其许可证由用户自行准备。":
+    "The first launch or test downloads a pinned rea-agents version through npx and requires npm registry access. Ghidra, JADX and other open-source tools can be installed from Settings; supply commercial tools and their licenses yourself.",
   "REA 官方项目与安装说明 ↗": "REA project and installation guide ↗",
   "REA 由 Codex / Claude Code 按需启动，无需在桌面启动实例或建立 CodeGraph 索引。退出桌面应用不影响客户端的 REA 进程。":
     "Codex / Claude Code launches REA on demand. No desktop instance or CodeGraph index is required. Exiting the desktop app does not stop the client's REA process.",
@@ -502,5 +502,77 @@ export const english = {
   点击启用: "Click to enable",
   图标启用写入: "Icons enable in",
   图标启用写入的客户端: "Client that engine icons enable MCP in",
+  "REA 环境已保存，并更新 {0} 个项目配置；请在客户端重新加载 MCP":
+    "REA environment saved and {0} project configurations updated. Reload MCP in the client",
+  "REA 环境已保存": "REA environment saved",
+  "以下项目配置未更新，请在 MCP 配置中检查：{0}":
+    "These project configurations were not updated. Check them under MCP configuration: {0}",
+  默认分析引擎: "Default analysis provider",
+  自动选择: "Automatic",
+  "Ghidra 安装目录": "Ghidra installation folder",
+  "Ghidra 使用的 JDK 目录": "JDK folder for Ghidra",
+  "IDA MCP 注册文件": "IDA MCP registration file",
+  "Hopper 启动器": "Hopper launcher",
+  "jadx-headless-mcp JAR": "jadx-headless-mcp JAR",
+  "ILSpy 命令行": "ILSpy command line",
+  工具参数描述: "Tool input schemas",
+  "完整（默认）": "Full (default)",
+  精简: "Compact",
+  未设置: "Not set",
+  "其他环境变量（{0}）": "Other environment variables ({0})",
+  "可填写 REA 支持的其他变量，例如 REA_GHIDRA_STARTUP_TIMEOUT_MS、REA_APKTOOL_COMMAND、REA_ADB_PATH。":
+    "Add other variables REA supports, such as REA_GHIDRA_STARTUP_TIMEOUT_MS, REA_APKTOOL_COMMAND, or REA_ADB_PATH.",
+  变量名: "Name",
+  值: "Value",
+  删除变量: "Remove variable",
+  添加变量: "Add variable",
+  "请先保存，检查使用已保存的配置":
+    "Save first. The check uses the saved configuration",
+  检查分析引擎: "Check analysis providers",
+  就绪: "Ready",
+  未就绪: "Not ready",
+  "变量会写入项目的 .codex/config.toml 或 .mcp.json；保存后自动更新已由本应用注入 REA 的项目配置，重新加载客户端后生效。":
+    "Variables are written to the project's .codex/config.toml or .mcp.json. Saving updates every REA entry this app manages; reload the client to apply.",
+  工具: "Tools",
+  "工具（已停用 {0} / 共 {1}）": "Tools ({0} of {1} disabled)",
+  "取消勾选的工具不会提供给模型：Codex 写入 disabled_tools，Claude Code 写入项目 .claude/settings.json 的 deny 规则。保存后自动更新已由本应用注入的配置。":
+    "Unchecked tools are hidden from the model: Codex receives disabled_tools, and Claude Code receives deny rules in the project's .claude/settings.json. Saving updates every entry this app manages.",
+  筛选工具: "Filter tools",
+  获取工具列表: "Load tool list",
+  "获取时会临时启动 REA 读取工具列表，完成后结束进程。":
+    "Loading starts REA temporarily to read its tools, then stops it.",
+  "先启动任一项目的该引擎实例，再获取工具列表。":
+    "Start this engine for any project, then load the tool list.",
+  保存工具设置: "Save tool settings",
+  全部启用: "Enable all",
+  "工具设置已保存，并更新 {0} 个客户端配置；请在客户端重新加载 MCP":
+    "Tool settings saved and {0} client configurations updated. Reload MCP in the client",
+  工具设置已保存: "Tool settings saved",
+  一键安装分析工具: "Install analysis tools",
+  "从官方发布地址下载并校验 SHA-256，安装到本应用的工具目录，并自动写入 REA 的 MCP 配置；客户端重新加载 MCP 后，REA 即可直接使用。IDA 与 Hopper 为商业软件，请自行安装后填写路径。":
+    "Downloads from the official release, verifies SHA-256, installs into this app's tools folder and adds the paths to REA's MCP configuration. REA can use them after the client reloads MCP. IDA and Hopper are commercial; install them yourself and enter their paths.",
+  安装位置: "Install location",
+  "原生二进制分析，约 570 MB，自动附带 JDK 21":
+    "Native binary analysis, about 570 MB; installs JDK 21 as needed",
+  "Android APK 分析，约 41 MB，自动附带 JDK 21":
+    "Android APK analysis, about 41 MB; installs JDK 21 as needed",
+  "Ghidra 与 JADX 使用的 Java 运行时，约 200 MB":
+    "Java runtime for Ghidra and JADX, about 200 MB",
+  ".NET 反编译命令行，需已安装 .NET SDK":
+    ".NET decompiler command line; requires the .NET SDK",
+  使用中: "In use",
+  已安装: "Installed",
+  使用: "Use",
+  安装: "Install",
+  安装进度: "Installation progress",
+  "正在准备…": "Preparing…",
+  "正在下载 {0}：{1} MB{2}": "Downloading {0}: {1} MB{2}",
+  "正在校验 {0}…": "Verifying {0}…",
+  "正在解压 {0}…": "Unpacking {0}…",
+  "正在写入 REA 环境…": "Saving the REA environment…",
+  "{0} 已安装并写入 REA 环境，已更新 {1} 个项目配置；请在客户端重新加载 MCP":
+    "{0} is installed and saved to the REA environment; {1} project configurations updated. Reload MCP in the client",
+  "{0} 已安装并写入 REA 环境":
+    "{0} is installed and saved to the REA environment",
 } as const;
 export type MessageKey = keyof typeof english;

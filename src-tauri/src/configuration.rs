@@ -2,13 +2,21 @@ use crate::models::*;
 use crate::persistence::HttpBinding;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, io::Write, path::Path};
+use std::{
+    collections::{BTreeMap, HashMap},
+    io::Write,
+    path::Path,
+};
 pub trait ConfigTarget {
     fn name(&self) -> &str;
     fn endpoint(&self) -> String;
     fn auth(&self) -> Option<String>;
     fn stdio(&self) -> Option<&StdioTarget> {
         None
+    }
+    /// Tools the client hides from the model; Codex writes them into the entry.
+    fn disabled_tools(&self) -> &[String] {
+        &[]
     }
 }
 impl ConfigTarget for HttpBinding {
@@ -27,10 +35,13 @@ pub struct Target {
     pub endpoint: String,
     pub authorization: Option<String>,
     pub stdio: Option<StdioTarget>,
+    pub disabled_tools: Vec<String>,
 }
 pub struct StdioTarget {
     pub command: String,
     pub args: Vec<String>,
+    /// Environment the client passes to the process; written only when non-empty.
+    pub env: BTreeMap<String, String>,
     pub startup_timeout_sec: i64,
     pub tool_timeout_sec: i64,
 }
@@ -46,6 +57,9 @@ impl ConfigTarget for Target {
     }
     fn stdio(&self) -> Option<&StdioTarget> {
         self.stdio.as_ref()
+    }
+    fn disabled_tools(&self) -> &[String] {
+        &self.disabled_tools
     }
 }
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -208,6 +222,13 @@ fn merge(
                         .map(String::as_str)
                         .collect::<toml_edit::Array>(),
                 );
+                if !stdio.env.is_empty() {
+                    let mut env = toml_edit::Table::new();
+                    for (key, value) in &stdio.env {
+                        env[key.as_str()] = toml_edit::value(value);
+                    }
+                    t["env"] = toml_edit::Item::Table(env);
+                }
                 t["startup_timeout_sec"] = toml_edit::value(stdio.startup_timeout_sec);
                 t["tool_timeout_sec"] = toml_edit::value(stdio.tool_timeout_sec);
             } else {
@@ -219,6 +240,15 @@ fn merge(
                 }
                 t["startup_timeout_sec"] = toml_edit::value(30);
                 t["tool_timeout_sec"] = toml_edit::value(120);
+            }
+            if !binding.disabled_tools().is_empty() {
+                t["disabled_tools"] = toml_edit::value(
+                    binding
+                        .disabled_tools()
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<toml_edit::Array>(),
+                );
             }
             doc["mcp_servers"][name] = toml_edit::Item::Table(t);
         }
@@ -251,9 +281,13 @@ fn merge(
         } else {
             servers.insert(name.into(), {
                 if let Some(stdio) = binding.stdio() {
-                    serde_json::json!({
+                    let mut value = serde_json::json!({
                         "type": "stdio", "command": stdio.command, "args": stdio.args
-                    })
+                    });
+                    if !stdio.env.is_empty() {
+                        value["env"] = serde_json::json!(stdio.env);
+                    }
+                    value
                 } else {
                     let mut value = serde_json::json!({"type":"http","url":binding.endpoint()});
                     if let Some(auth) = binding.auth() {
@@ -1401,6 +1435,20 @@ fn managed_fingerprint(
                 .and_then(|v| v.get(name))
                 .and_then(|v| v.as_table_like())
                 .is_some_and(|server| {
+                    let disabled = binding.disabled_tools();
+                    if !server
+                        .get("disabled_tools")
+                        .map_or(disabled.is_empty(), |tools| {
+                            tools.as_array().is_some_and(|tools| {
+                                tools
+                                    .iter()
+                                    .map(|v| v.as_str())
+                                    .eq(disabled.iter().map(|v| Some(v.as_str())))
+                            })
+                        })
+                    {
+                        return false;
+                    }
                     if let Some(stdio) = binding.stdio() {
                         return server.get("command").and_then(|v| v.as_str())
                             == Some(stdio.command.as_str())
@@ -1412,6 +1460,14 @@ fn managed_fingerprint(
                                         .map(|v| v.as_str())
                                         .eq(stdio.args.iter().map(|v| Some(v.as_str())))
                                 })
+                            && server.get("env").map_or(stdio.env.is_empty(), |env| {
+                                env.as_table_like().is_some_and(|env| {
+                                    env.len() == stdio.env.len()
+                                        && env.iter().all(|(key, value)| {
+                                            value.as_str() == stdio.env.get(key).map(String::as_str)
+                                        })
+                                })
+                            })
                             && server.get("url").is_none()
                             && server.get("http_headers").is_none();
                     }
@@ -1439,6 +1495,9 @@ fn managed_fingerprint(
                             && server.get("command").and_then(|v| v.as_str())
                                 == Some(stdio.command.as_str())
                             && server.get("args") == Some(&serde_json::json!(stdio.args))
+                            && server.get("env").map_or(stdio.env.is_empty(), |env| {
+                                *env == serde_json::json!(stdio.env)
+                            })
                             && server.get("url").is_none()
                             && server.get("headers").is_none();
                     }
@@ -1470,7 +1529,7 @@ mod override_tests {
         for client in ["codex", "claude"] {
             let (dir, p, _) = fixture();
             let data = tempfile::tempdir().unwrap();
-            let binding = crate::rea::binding();
+            let binding = crate::rea::binding(Default::default());
             let path = file_path(dir.path(), client);
             let original = if client == "codex" {
                 "# keep\nmodel = 'existing'\n[mcp_servers.other]\ncommand = 'other'\n"
@@ -1540,14 +1599,16 @@ mod override_tests {
                     endpoint: cg.endpoint(),
                     authorization: Some(cg.authorization()),
                     stdio: None,
+                    disabled_tools: vec![],
                 },
                 Target {
                     name: "serena".into(),
                     endpoint: "http://127.0.0.1:58310/mcp".into(),
                     authorization: None,
                     stdio: None,
+                    disabled_tools: vec![],
                 },
-                crate::rea::binding(),
+                crate::rea::binding(Default::default()),
             ];
             let clients: Vec<String> = vec!["codex".into(), "claude".into()];
             let originals = [
@@ -1637,14 +1698,16 @@ mod override_tests {
                 endpoint: cg.endpoint(),
                 authorization: Some(cg.authorization()),
                 stdio: None,
+                disabled_tools: vec![],
             },
             Target {
                 name: "serena".into(),
                 endpoint: "http://127.0.0.1:58310/mcp".into(),
                 authorization: None,
                 stdio: None,
+                disabled_tools: vec![],
             },
-            crate::rea::binding(),
+            crate::rea::binding(Default::default()),
         ];
         let clients: Vec<String> = vec!["codex".into(), "claude".into()];
         let preview =
@@ -1743,7 +1806,7 @@ mod override_tests {
         let clients: Vec<String> = vec!["codex".into(), "claude".into()];
         let cg = preview(&p, &clients, "install", &codegraph, &HashMap::new()).unwrap();
         apply(&cg, dir.path(), data.path()).unwrap();
-        let rea = crate::rea::binding();
+        let rea = crate::rea::binding(Default::default());
         let change = preview(&p, &clients, "install", &rea, &HashMap::new()).unwrap();
         let expected = rea.stdio.as_ref().unwrap();
         for file in &change.files {
@@ -1813,6 +1876,96 @@ mod override_tests {
         );
     }
     #[test]
+    fn rea_environment_is_written_and_tracked_as_part_of_the_managed_entry() {
+        let (dir, p, _) = fixture();
+        let data = tempfile::tempdir().unwrap();
+        let clients: Vec<String> = vec!["codex".into(), "claude".into()];
+        let plain = crate::rea::binding(Default::default());
+        let install = preview(&p, &clients, "install", &plain, &HashMap::new()).unwrap();
+        for file in &install.files {
+            assert!(!file.after.contains("env"));
+        }
+        apply(&install, dir.path(), data.path()).unwrap();
+        let owned: HashMap<_, _> = install
+            .files
+            .iter()
+            .map(|f| (f.client.clone(), f.fingerprint.clone().unwrap()))
+            .collect();
+        let rea = crate::rea::binding(BTreeMap::from([
+            ("GHIDRA_INSTALL_DIR".into(), r"C:\Tools\ghidra".into()),
+            ("REA_ANALYSIS_PROVIDER".into(), "ghidra".into()),
+        ]));
+        assert!(status(&p, &rea).iter().all(|s| s.state == "repair"));
+        for client in &clients {
+            let update = preview_toggle(&p, client, true, &rea, &owned).unwrap();
+            let file = &update.files[0];
+            validate_content(&file.after, client).unwrap();
+            if client == "codex" {
+                let doc = file.after.parse::<toml_edit::DocumentMut>().unwrap();
+                let env = &doc["mcp_servers"]["rea"]["env"];
+                assert_eq!(env["GHIDRA_INSTALL_DIR"].as_str(), Some(r"C:\Tools\ghidra"));
+                assert_eq!(env["REA_ANALYSIS_PROVIDER"].as_str(), Some("ghidra"));
+            } else {
+                let doc: serde_json::Value = serde_json::from_str(&file.after).unwrap();
+                assert_eq!(
+                    doc["mcpServers"]["rea"]["env"],
+                    serde_json::json!({
+                        "GHIDRA_INSTALL_DIR": r"C:\Tools\ghidra",
+                        "REA_ANALYSIS_PROVIDER": "ghidra",
+                    })
+                );
+            }
+            apply(&update, dir.path(), data.path()).unwrap();
+            let changed = file.after.replace("ghidra\"", "ida\"");
+            assert!(managed_fingerprint(&changed, client, "rea", &p.id, &rea)
+                .unwrap()
+                .is_none());
+        }
+        assert!(status(&p, &rea).iter().all(|s| s.state == "configured"));
+        assert!(status(&p, &plain).iter().all(|s| s.state == "repair"));
+    }
+    #[test]
+    fn disabled_tools_are_part_of_managed_http_entries() {
+        let (dir, p, _) = fixture();
+        let data = tempfile::tempdir().unwrap();
+        let clients: Vec<String> = vec!["codex".into(), "claude".into()];
+        let target = |disabled_tools: Vec<String>| Target {
+            name: "serena".into(),
+            endpoint: "http://127.0.0.1:58310/mcp".into(),
+            authorization: None,
+            stdio: None,
+            disabled_tools,
+        };
+        let hidden = target(vec!["rename_symbol".into(), "write_memory".into()]);
+        let change = preview(&p, &clients, "install", &hidden, &HashMap::new()).unwrap();
+        for file in &change.files {
+            validate_content(&file.after, &file.client).unwrap();
+            if file.client == "codex" {
+                let doc = file.after.parse::<toml_edit::DocumentMut>().unwrap();
+                let tools = doc["mcp_servers"]["serena"]["disabled_tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(tools, ["rename_symbol", "write_memory"]);
+            } else {
+                assert!(!file.after.contains("disabled_tools"));
+            }
+        }
+        apply(&change, dir.path(), data.path()).unwrap();
+        let states = |binding: &Target| {
+            status(&p, binding)
+                .into_iter()
+                .map(|s| (s.client, s.state))
+                .collect::<HashMap<_, _>>()
+        };
+        assert_eq!(states(&hidden)["codex"], "configured");
+        let shown = states(&target(vec![]));
+        assert_eq!(shown["codex"], "repair");
+        assert_eq!(shown["claude"], "configured");
+    }
+    #[test]
     fn serena_configuration_preserves_codegraph_and_tracks_separate_ownership() {
         let (_dir, p, codegraph) = fixture();
         let data = tempfile::tempdir().unwrap();
@@ -1824,6 +1977,7 @@ mod override_tests {
             endpoint: "http://127.0.0.1:58310/mcp".into(),
             authorization: None,
             stdio: None,
+            disabled_tools: vec![],
         };
         let change = preview(&p, &clients, "install", &serena, &HashMap::new()).unwrap();
         let owned: HashMap<_, _> = change

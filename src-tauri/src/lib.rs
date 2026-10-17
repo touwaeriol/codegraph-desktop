@@ -9,9 +9,11 @@ mod lifecycle;
 mod models;
 mod persistence;
 mod rea;
+mod rea_tools;
 mod resume;
 mod runtime;
 mod serena;
+mod tools;
 mod updates;
 mod warpgrep;
 use models::*;
@@ -593,6 +595,16 @@ pub fn run() {
             warpgrep::warpgrep_operation,
             warpgrep::get_warpgrep_snapshot,
             warpgrep::list_warpgrep_snapshots,
+            rea::get_rea_environment,
+            rea::save_rea_environment,
+            rea::check_rea_environment,
+            rea_tools::get_rea_tools,
+            rea_tools::install_rea_tool,
+            rea_tools::cancel_rea_tool_install,
+            rea_tools::open_rea_tools_directory,
+            tools::get_engine_tools,
+            tools::refresh_engine_tools,
+            tools::save_disabled_tools,
             commands::list_projects,
             commands::add_project,
             commands::update_project,

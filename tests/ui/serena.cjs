@@ -497,7 +497,9 @@ const assert = require("node:assert/strict");
       await page.keyboard.press("Control+,");
       const cgSettings = page.getByTestId("codegraph-settings"),
         srSettings = page.getByTestId("serena-settings");
-      await page.getByTestId("rea-settings").getByRole("link").click();
+      const reaSettings = page.getByTestId("rea-settings");
+      await reaSettings.locator("details:has(a) > summary").click();
+      await reaSettings.getByRole("link").click();
       assert(
         await page.evaluate(() =>
           window.__calls.some(
@@ -515,7 +517,7 @@ const assert = require("node:assert/strict");
           "https://oraios.github.io/serena/02-usage/010_installation.html",
         ],
       ]) {
-        await card.locator("summary").click();
+        await card.locator("details:has(a) > summary").click();
         const link = card.getByRole("link");
         for (const action of ["click", "keyboard", "middle", "control"]) {
           await page.evaluate(() => (window.__calls = []));
@@ -547,7 +549,7 @@ const assert = require("node:assert/strict");
           .first()
           .waitFor();
         await page.evaluate(() => (window.__openerError = false));
-        await card.locator("summary").click();
+        await card.locator("details:has(a) > summary").click();
       }
       const cgInput = page.locator("#entry"),
         srInput = page.locator("#serena-entry");

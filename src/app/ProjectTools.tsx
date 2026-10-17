@@ -822,7 +822,7 @@ export function ProjectTools({
                     "配置后重新加载客户端并批准 MCP。测试连接会临时启动 REA，仅验证握手和工具列表，完成后回收测试进程。",
                   )}{" "}
                   {t(
-                    "首次启动或测试会通过 npx 下载固定版本的 rea-agents，需要访问 npm registry。分析工具及其许可证由用户自行准备。",
+                    "首次启动或测试会通过 npx 下载固定版本的 rea-agents，需要访问 npm registry。Ghidra、JADX 等可在设置中一键安装，商业工具及其许可证由用户自行准备。",
                   )}
                 </p>
               )}

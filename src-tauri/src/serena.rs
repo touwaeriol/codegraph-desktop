@@ -99,6 +99,7 @@ pub fn binding_db(db: &mut rusqlite::Connection, id: &str) -> Result<Target> {
         endpoint: format!("http://127.0.0.1:{port}/mcp"),
         authorization: None,
         stdio: None,
+        disabled_tools: vec![],
     })
 }
 fn candidates(saved: Option<String>) -> Vec<PathBuf> {

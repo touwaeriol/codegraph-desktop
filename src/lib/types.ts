@@ -105,3 +105,36 @@ export interface SerenaSnapshot {
   error: { code: string; message: string } | null;
 }
 export type WarpGrepSnapshot = SerenaSnapshot;
+export type ReaEnvironment = Record<string, string>;
+export interface ReaEnvironmentSaved {
+  environment: ReaEnvironment;
+  updated: string[];
+  failed: string[];
+}
+export interface ReaCheck {
+  name: string;
+  ok: boolean;
+  detail: string | null;
+  remediation: string | null;
+}
+export interface EngineToolLists {
+  known: Partial<Record<Engine, string[]>>;
+  disabled: Partial<Record<Engine, string[]>>;
+}
+export interface DisabledToolsSaved {
+  disabled: string[];
+  updated: string[];
+  failed: string[];
+}
+export interface ReaTools {
+  tools: { id: string; installed: string | null; inUse: boolean }[];
+  installing: boolean;
+  directory: string;
+}
+export interface ReaToolProgress {
+  tool: string;
+  item: string;
+  phase: "download" | "verify" | "extract" | "configure" | "done" | "failed";
+  downloaded: number;
+  total: number | null;
+}

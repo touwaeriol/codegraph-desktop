@@ -22,6 +22,7 @@ import {
   EngineSettingsCard,
   Metric,
 } from "./EngineOverview";
+import { EngineTools } from "./EngineTools";
 import { t, useLanguage } from "@/lib/i18n";
 import type { Environment, SerenaSnapshot } from "@/lib/types";
 
@@ -305,6 +306,7 @@ export function SerenaSettings({ entry: initial }: { entry?: string | null }) {
             {t("Serena 官方安装说明 ↗")}
           </ExternalLink>
         </details>
+        <EngineTools engine="serena" />
       </Field>
     </EngineSettingsCard>
   );

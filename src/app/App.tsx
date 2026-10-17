@@ -73,6 +73,7 @@ import type {
 import { ClientSwitch, EngineList, useActivation } from "./Activation";
 import { SerenaPanel, SerenaSettings, useSerena } from "./Serena";
 import { ReaPanel, ReaSettings } from "./Rea";
+import { EngineTools } from "./EngineTools";
 import { WarpGrepPanel, WarpGrepSettings, useWarpGrep } from "./WarpGrep";
 import { ProjectTools } from "./ProjectTools";
 import { useUpdates, UpdateNotice, UpdateSettings } from "./Updates";
@@ -1573,6 +1574,7 @@ function SettingsForm({
                   {t("CodeGraph 官方项目与安装说明 ↗")}
                 </ExternalLink>
               </details>
+              <EngineTools engine="codegraph" />
             </Field>
           </EngineSettingsCard>
           <SerenaSettings entry={settings?.serenaEntry} />

@@ -243,7 +243,7 @@ pub async fn ensure(
 
 /// Proxy for installers. Toolchains such as Go only read `HTTPS_PROXY`, which
 /// GUI launches rarely carry, so fall back to the system proxy setting.
-async fn system_proxy() -> Option<String> {
+pub(crate) async fn system_proxy() -> Option<String> {
     if ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
         .iter()
         .any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty()))

@@ -153,6 +153,7 @@ pub fn binding(state: &AppState, id: &str) -> Result<Target> {
         endpoint: format!("http://127.0.0.1:{}/warpgrep/{id}", b.port),
         authorization: Some(b.authorization()),
         stdio: None,
+        disabled_tools: vec![],
     })
 }
 pub fn require_key(state: &AppState) -> Result<()> {

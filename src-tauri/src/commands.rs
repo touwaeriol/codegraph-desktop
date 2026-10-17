@@ -412,28 +412,37 @@ pub fn read_logs(
 pub fn http_binding(state: &AppState, project_id: &str) -> Result<persistence::HttpBinding> {
     persistence::ensure_http_binding(&mut state.db.lock().unwrap(), project_id)
 }
-fn binding_for(state: &AppState, id: &str, engine: Option<&str>) -> Result<configuration::Target> {
-    match engine.unwrap_or("codegraph") {
+pub(crate) fn binding_for(
+    state: &AppState,
+    id: &str,
+    engine: Option<&str>,
+) -> Result<configuration::Target> {
+    let mut target = match engine.unwrap_or("codegraph") {
         engine
             if engine == "codegraph"
                 || engine == format!("codegraph_project_{}", id.replace('-', "")) =>
         {
             let b = http_binding(state, id)?;
-            Ok(configuration::Target {
+            configuration::Target {
                 name: "codegraph".into(),
                 endpoint: b.endpoint(),
                 authorization: Some(b.authorization()),
                 stdio: None,
-            })
+                disabled_tools: vec![],
+            }
         }
-        "serena" => crate::serena::binding(state, id),
-        "warpgrep" => crate::warpgrep::binding(state, id),
-        "rea" => Ok(crate::rea::binding()),
-        _ => Err(AppError::new(
-            "INVALID_ENGINE",
-            crate::i18n::tr("不支持的引擎", "Unknown engine"),
-        )),
-    }
+        "serena" => crate::serena::binding(state, id)?,
+        "warpgrep" => crate::warpgrep::binding(state, id)?,
+        "rea" => crate::rea::configured_binding(state)?,
+        _ => {
+            return Err(AppError::new(
+                "INVALID_ENGINE",
+                crate::i18n::tr("不支持的引擎", "Unknown engine"),
+            ))
+        }
+    };
+    target.disabled_tools = crate::tools::disabled(state, &target.name)?;
+    Ok(target)
 }
 fn managed_key(engine: &str, client: &str) -> String {
     if engine == "codegraph" || engine.starts_with("codegraph_project_") {
@@ -590,7 +599,7 @@ fn apply_config(
             "项目目录记录已变化，请重新预览",
         ));
     }
-    let result = configuration::apply(preview, Path::new(root), &state.data)?;
+    let mut result = configuration::apply(preview, Path::new(root), &state.data)?;
     let succeeded = result
         .files
         .iter()
@@ -624,6 +633,28 @@ fn apply_config(
             }
         }
         tx.commit()?;
+    }
+    if preview.validated_root.is_none()
+        && succeeded
+        && preview.files.iter().any(|f| f.client == "claude")
+    {
+        // Claude Code hides disabled tools through deny rules that follow its entries.
+        let path = crate::tools::claude_settings(&p)
+            .to_string_lossy()
+            .into_owned();
+        match crate::tools::sync_claude(state, &p) {
+            Ok(false) => {}
+            Ok(true) => result.files.push(configuration::FileResult {
+                path,
+                status: "success".into(),
+                message: crate::i18n::message("配置已写入"),
+            }),
+            Err(error) => result.files.push(configuration::FileResult {
+                path,
+                status: "failed".into(),
+                message: error.message,
+            }),
+        }
     }
     if succeeded {
         state.previews.lock().unwrap().remove(&preview.preview_id);
@@ -672,89 +703,159 @@ pub async fn test_project_mcp(
     project_id: String,
     engine: Option<String>,
 ) -> Result<ProbeResult> {
-    state.project(&project_id)?;
-    if !["codegraph", "serena", "warpgrep", "rea"]
-        .contains(&engine.as_deref().unwrap_or("codegraph"))
-    {
-        return Err(AppError::new("INVALID_ENGINE", "Unknown engine"));
-    }
-    if engine.as_deref() == Some("rea") {
-        let lock = state.operation_lock(&project_id);
-        let _guard = lock.lock().await;
-        if state.quitting.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(AppError::new("APP_EXITING", "应用正在退出"));
+    let engine = engine.unwrap_or_else(|| "codegraph".into());
+    let tools = probe_tools(&state, &project_id, &engine).await?;
+    crate::tools::remember(&state, &engine, &tools)?;
+    let message = match engine.as_str() {
+        "rea" => crate::i18n::tr(
+            "REA MCP 握手与工具列表验证通过，测试进程已停止。分析引擎可用性需按任务另行确认；真实客户端连接需重新加载客户端。",
+            "REA MCP handshake and tool list verified; the test process has stopped. Analysis providers require task-specific checks; reload your client to connect.",
+        ).into(),
+        "warpgrep" => crate::i18n::tr(
+            "WarpGrep MCP 握手及工具列表通过；检索调用会使用已验证的 Morph API Key。",
+            "WarpGrep MCP handshake and tool list passed; searches use the validated Morph API key.",
+        )
+        .into(),
+        "serena" => {
+            crate::i18n::tr("Serena MCP 握手成功", "Serena MCP handshake succeeded").into()
         }
-        let tools = crate::rea::probe(&state, state.project(&project_id)?).await?;
-        return Ok(ProbeResult {
-            success: true,
-            tools,
-            message: crate::i18n::tr(
-                "REA MCP 握手与工具列表验证通过，测试进程已停止。分析引擎可用性需按任务另行确认；真实客户端连接需重新加载客户端。",
-                "REA MCP handshake and tool list verified; the test process has stopped. Analysis providers require task-specific checks; reload your client to connect.",
-            ).into(),
-            checked_at: now(),
-        });
-    }
-    if engine.as_deref() == Some("warpgrep") {
-        if !crate::warpgrep::is_running(&state, &project_id).await {
-            return Err(AppError::new(
-                "SERVICE_NOT_RUNNING",
-                crate::i18n::tr("WarpGrep 尚未启动", "WarpGrep is not running"),
-            ));
-        }
-        let binding = http_binding(&state, &project_id)?;
-        let target = crate::warpgrep::binding(&state, &project_id)?;
-        let tools = project_gateway::probe_http(&target.endpoint, &binding.token)
-            .await
-            .map_err(|e| AppError::new("MCP_HANDSHAKE_FAILED", e))?;
-        return Ok(ProbeResult {
-            success: true,
-            tools,
-            message: crate::i18n::tr(
-                "WarpGrep MCP 握手及工具列表通过；检索调用会使用已验证的 Morph API Key。",
-                "WarpGrep MCP handshake and tool list passed; searches use the validated Morph API key.",
-            )
-            .into(),
-            checked_at: now(),
-        });
-    }
-    if engine.as_deref() == Some("serena") {
-        if !state
-            .serena_instances
-            .lock()
-            .await
-            .contains_key(&project_id)
-        {
-            return Err(AppError::new(
-                "SERVICE_NOT_RUNNING",
-                crate::i18n::tr("Serena 尚未运行", "Serena is not running"),
-            ));
-        }
-        let target = binding_for(&state, &project_id, Some("serena"))?;
-        let tools = project_gateway::probe_native_http(&target.endpoint)
-            .await
-            .map_err(|e| AppError::new("MCP_HANDSHAKE_FAILED", e))?;
-        return Ok(ProbeResult {
-            success: true,
-            tools,
-            message: crate::i18n::tr("Serena MCP 握手成功", "Serena MCP handshake succeeded")
-                .into(),
-            checked_at: now(),
-        });
-    }
-    let record = project_protocol::read_runtime(&project_id)
-        .map_err(|e| AppError::new("SERVICE_NOT_RUNNING", e))?;
-    let tools = project_gateway::probe(&record)
-        .await
-        .map_err(|e| AppError::new("MCP_HANDSHAKE_FAILED", e))?;
+        _ => crate::i18n::message("网关 MCP 初始化及工具列表通过；真实客户端连接需在客户端确认。"),
+    };
     Ok(ProbeResult {
         success: true,
         tools,
-        message: crate::i18n::message(
-            "网关 MCP 初始化及工具列表通过；真实客户端连接需在客户端确认。",
-        ),
+        message,
         checked_at: now(),
     })
+}
+/// Lists the tools an engine offers for a project: REA through a temporary
+/// process, the other engines through the project's running instance.
+pub(crate) async fn probe_tools(
+    state: &AppState,
+    project_id: &str,
+    engine: &str,
+) -> Result<Vec<String>> {
+    let project = state.project(project_id)?;
+    match engine {
+        "rea" => {
+            let lock = state.operation_lock(project_id);
+            let _guard = lock.lock().await;
+            if state.quitting.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(AppError::new("APP_EXITING", "应用正在退出"));
+            }
+            crate::rea::probe(state, persistence::canonical(&project.canonical_path)?).await
+        }
+        "warpgrep" => {
+            if !crate::warpgrep::is_running(state, project_id).await {
+                return Err(AppError::new(
+                    "SERVICE_NOT_RUNNING",
+                    crate::i18n::tr("WarpGrep 尚未启动", "WarpGrep is not running"),
+                ));
+            }
+            let binding = http_binding(state, project_id)?;
+            let target = crate::warpgrep::binding(state, project_id)?;
+            project_gateway::probe_http(&target.endpoint, &binding.token)
+                .await
+                .map_err(|e| AppError::new("MCP_HANDSHAKE_FAILED", e))
+        }
+        "serena" => {
+            if !state.serena_instances.lock().await.contains_key(project_id) {
+                return Err(AppError::new(
+                    "SERVICE_NOT_RUNNING",
+                    crate::i18n::tr("Serena 尚未运行", "Serena is not running"),
+                ));
+            }
+            let target = crate::serena::binding(state, project_id)?;
+            project_gateway::probe_native_http(&target.endpoint)
+                .await
+                .map_err(|e| AppError::new("MCP_HANDSHAKE_FAILED", e))
+        }
+        "codegraph" => {
+            let record = project_protocol::read_runtime(project_id)
+                .map_err(|e| AppError::new("SERVICE_NOT_RUNNING", e))?;
+            project_gateway::probe(&record)
+                .await
+                .map_err(|e| AppError::new("MCP_HANDSHAKE_FAILED", e))
+        }
+        _ => Err(AppError::new("INVALID_ENGINE", "Unknown engine")),
+    }
+}
+#[derive(serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Resynced {
+    /// Client configurations rewritten with the new settings.
+    pub updated: Vec<String>,
+    /// Client configurations left unchanged, with the reason.
+    pub failed: Vec<String>,
+}
+impl Resynced {
+    pub fn label(project: &Project, client: &str) -> String {
+        format!(
+            "{} · {}",
+            project.name,
+            if client == "codex" {
+                "Codex"
+            } else {
+                "Claude Code"
+            }
+        )
+    }
+}
+/// After an engine setting changes, rewrites every entry this app manages that
+/// matched the binding built by `previous` but no longer matches the current one.
+pub(crate) async fn resync(
+    state: &AppState,
+    engine: &str,
+    previous: impl Fn(configuration::Target) -> configuration::Target,
+) -> Result<Resynced> {
+    let mut resynced = Resynced::default();
+    let projects = persistence::list(&state.db.lock().unwrap())?;
+    for project in projects {
+        let Ok(current) = binding_for(state, &project.id, Some(engine)) else {
+            continue;
+        };
+        let before = configuration::status(
+            &project,
+            &previous(binding_for(state, &project.id, Some(engine))?),
+        );
+        let after = configuration::status(&project, &current);
+        for (old, new) in before.iter().zip(&after) {
+            if old.state != "configured" || new.state == "configured" {
+                continue;
+            }
+            let label = Resynced::label(&project, &old.client);
+            match set_mcp_configuration(
+                state,
+                project.id.clone(),
+                old.client.clone(),
+                engine.into(),
+                true,
+            )
+            .await
+            {
+                Ok(result)
+                    if result
+                        .files
+                        .iter()
+                        .all(|file| file.status == "success" || file.status == "unchanged") =>
+                {
+                    resynced.updated.push(label)
+                }
+                Ok(result) => resynced.failed.push(format!(
+                    "{label}: {}",
+                    result
+                        .files
+                        .iter()
+                        .filter(|file| file.status != "success" && file.status != "unchanged")
+                        .map(|file| file.message.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )),
+                Err(error) => resynced.failed.push(format!("{label}: {}", error.message)),
+            }
+        }
+    }
+    Ok(resynced)
 }
 #[tauri::command]
 pub fn get_project_tasks(state: State<AppState>, project_id: String) -> Result<Vec<TaskProgress>> {
@@ -807,7 +908,7 @@ pub fn preview_restore_backup(
     }
     Err(AppError::new("BACKUP_NOT_FOUND", "找不到此备份所属项目"))
 }
-fn open_directory(path: &Path) -> Result<()> {
+pub(crate) fn open_directory(path: &Path) -> Result<()> {
     if !path.is_dir() {
         return Err(AppError::new("PROJECT_MISSING", "目录不存在"));
     }

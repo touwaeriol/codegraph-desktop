@@ -2,6 +2,14 @@
 
 日期：2026-10-03。本文件区分已运行检查和仍待完成的发布验收；设计文档中的性能预算不视为测量结果。
 
+## 0.1.28 REA 运行环境、工具开关与一键安装分析工具（2026-10-17）
+
+- 设置中的 REA 卡片可配置默认分析引擎、Ghidra / JDK / IDA / Hopper / JADX / ILSpy 路径、工具参数描述及其他 REA 环境变量。变量写入项目 MCP 条目的 `env`（Codex `.codex/config.toml`、Claude Code `.mcp.json`），并计入托管条目指纹；保存后自动重写已由本应用注入 REA 且仍为“已配置”状态的项目条目。“检查分析引擎”使用已保存的环境运行 `rea doctor --filter-output scope_checks`。
+- CodeGraph、Serena、WarpGrep、REA 设置卡片可获取工具列表并禁用部分工具：Codex 写入 MCP 条目的 `disabled_tools`（已用 Codex 0.162 `codex mcp get` 确认生效）；Claude Code 在 `.claude/settings.json` 的 `permissions.deny` 中只增删本应用写入的 `mcp__<server>__<tool>` 规则，保留用户规则。
+- 一键安装 Temurin JDK 21、Ghidra 12.1.4、jadx-headless-mcp 0.7.1 与 ilspycmd，全部放在应用数据目录的 `tools` 下，不修改系统 PATH、注册表或全局环境变量。Ghidra 与 JADX 校验 REA 6.5.0 固定的 SHA-256，JDK 校验 Adoptium API 返回的校验值；下载使用系统代理，可取消，压缩包拒绝越出目标目录的条目。安装完成后路径写入 REA 环境并同步项目配置。
+- 本机真实下载安装 JDK、JADX 与 Ghidra 后，`rea doctor` 报告 `ghidra`、`ghidra-installation`、`ghidra-java`、`jadx` 均就绪（忽略测试 `installed_tools_pass_rea_doctor`）。ilspycmd 安装因本机没有 .NET SDK 未实测；IDA、Hopper 为商业软件，仍需自行安装。
+- 本机 Rust 工作区测试（79 通过、5 忽略）、Clippy、格式检查、TypeScript 检查通过；浏览器模拟 IPC 回归新增 `rea-settings.cjs`、`engine-tools.cjs`，并通过 `serena`、`config-preview`、`environment-detection`、`activation`。真实 Codex / Claude Code 会话中由 REA 调用 Ghidra 的端到端流程尚待安装后验收。
+
 ## 0.1.27 一键启用与环境兼容（2026-10-17）
 
 - 0.1.26 标签的 Windows 构建因仅 Unix 使用的 PATH 辅助函数触发 Clippy 未使用错误而失败，未发布 Release；0.1.27 修复后发布同一功能集。

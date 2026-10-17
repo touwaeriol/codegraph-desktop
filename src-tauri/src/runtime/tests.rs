@@ -82,7 +82,7 @@ async fn project_mcp_toggles_serialize_writes_and_track_ownership_per_client() {
     )
     .await
     .unwrap();
-    let statuses = crate::configuration::status(&project, &crate::rea::binding());
+    let statuses = crate::configuration::status(&project, &crate::rea::binding(Default::default()));
     assert!(statuses.iter().all(|s| s.state == "missing"));
     let state = &fixture.state;
     let count: usize = state
@@ -114,6 +114,150 @@ async fn project_mcp_toggles_serialize_writes_and_track_ownership_per_client() {
         .code,
         "MORPH_KEY_REQUIRED",
     );
+}
+
+#[tokio::test]
+async fn disabled_tools_follow_codex_entries_and_claude_deny_rules() {
+    let fixture = Fixture::new();
+    let project = fixture.project();
+    let state = &fixture.state;
+    let root = Path::new(&project.canonical_path);
+    let codex = root.join(".codex/config.toml");
+    let claude = root.join(".claude/settings.json");
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    std::fs::write(&claude, r#"{"permissions":{"deny":["Bash(rm *)"]}}"#).unwrap();
+    let codex_tools = || -> Vec<String> {
+        let doc = std::fs::read_to_string(&codex)
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        doc["mcp_servers"]["rea"]
+            .get("disabled_tools")
+            .and_then(|tools| tools.as_array())
+            .map(|tools| tools.iter().map(|t| t.as_str().unwrap().into()).collect())
+            .unwrap_or_default()
+    };
+    let deny = || -> Vec<String> {
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&claude).unwrap()).unwrap();
+        serde_json::from_value(doc["permissions"]["deny"].clone()).unwrap()
+    };
+
+    let saved = crate::tools::save(state, "rea".into(), vec!["binary_session".into()])
+        .await
+        .unwrap();
+    assert_eq!(serde_json::json!(saved)["updated"], serde_json::json!([]));
+    assert!(!codex.exists());
+    assert_eq!(deny(), ["Bash(rm *)"]);
+
+    for client in ["codex", "claude"] {
+        let applied = crate::commands::set_mcp_configuration(
+            state,
+            project.id.clone(),
+            client.into(),
+            "rea".into(),
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(applied.files.iter().all(|file| file.status == "success"));
+    }
+    assert_eq!(codex_tools(), ["binary_session"]);
+    assert_eq!(deny(), ["Bash(rm *)", "mcp__rea__binary_session"]);
+
+    let saved = crate::tools::save(
+        state,
+        "rea".into(),
+        vec![" inspect_wasm_artifact ".into(), "binary_session".into()],
+    )
+    .await
+    .unwrap();
+    let saved = serde_json::json!(saved);
+    assert_eq!(
+        saved["disabled"],
+        serde_json::json!(["binary_session", "inspect_wasm_artifact"])
+    );
+    assert_eq!(saved["updated"].as_array().unwrap().len(), 2);
+    assert_eq!(saved["failed"], serde_json::json!([]));
+    assert_eq!(codex_tools(), ["binary_session", "inspect_wasm_artifact"]);
+    assert_eq!(
+        deny(),
+        [
+            "Bash(rm *)",
+            "mcp__rea__binary_session",
+            "mcp__rea__inspect_wasm_artifact"
+        ]
+    );
+    let binding = crate::commands::binding_for(state, &project.id, Some("rea")).unwrap();
+    assert!(crate::configuration::status(&project, &binding)
+        .iter()
+        .all(|status| status.state == "configured"));
+
+    crate::commands::set_mcp_configuration(
+        state,
+        project.id.clone(),
+        "claude".into(),
+        "rea".into(),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(deny(), ["Bash(rm *)"]);
+    crate::tools::save(state, "rea".into(), vec![])
+        .await
+        .unwrap();
+    assert!(codex_tools().is_empty());
+    assert_eq!(
+        crate::tools::save(state, "rea".into(), vec!["bad name".into()])
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "INVALID_TOOL"
+    );
+}
+
+#[tokio::test]
+#[ignore = "下载约 800 MB 的 JDK、Ghidra 与 JADX，需要网络、Node.js 与 npx"]
+async fn installed_tools_pass_rea_doctor() {
+    let fixture = Fixture::new();
+    let state = &fixture.state;
+    for tool in ["jadx", "ghidra"] {
+        let installer =
+            crate::rea_tools::Installer::new(tool, Arc::new(AtomicBool::new(false)), |progress| {
+                if progress.downloaded % (64 << 20) < (1 << 20) {
+                    println!("{progress:?}");
+                }
+            })
+            .await
+            .unwrap();
+        let environment = crate::rea_tools::install(&installer, state, tool)
+            .await
+            .unwrap();
+        crate::rea::store_environment(state, environment)
+            .await
+            .unwrap();
+    }
+    let environment = crate::rea::environment(state).unwrap();
+    println!("{environment:#?}");
+    for key in ["JAVA_HOME", "GHIDRA_INSTALL_DIR", "REA_JADX_MCP_JAR"] {
+        assert!(Path::new(&environment[key]).exists(), "{key}");
+    }
+    let checks = crate::rea::doctor(crate::rea::binding(environment).stdio.unwrap())
+        .await
+        .unwrap();
+    let checks = serde_json::json!(checks);
+    println!("{}", serde_json::to_string_pretty(&checks).unwrap());
+    for name in ["ghidra", "ghidra-installation", "ghidra-java", "jadx"] {
+        assert!(
+            checks
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| check["name"] == name && check["ok"] == true),
+            "{name}"
+        );
+    }
 }
 
 impl Fixture {
