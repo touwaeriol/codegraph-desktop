@@ -154,6 +154,7 @@ pub fn binding(state: &AppState, id: &str) -> Result<Target> {
         authorization: Some(b.authorization()),
         stdio: None,
         disabled_tools: vec![],
+        known_tools: vec![],
     })
 }
 pub fn require_key(state: &AppState) -> Result<()> {

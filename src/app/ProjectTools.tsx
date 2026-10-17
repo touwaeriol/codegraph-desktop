@@ -38,6 +38,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { LineDiff } from "@/components/LineDiff";
 import { Elapsed } from "@/components/Elapsed";
 import { call, message, subscribe } from "@/lib/ipc";
+import { CLIENTS, clientName, clientPath } from "@/lib/clients";
 import { McpList, ENGINES, engineLabel, type McpChange } from "./McpList";
 import type {
   Client,
@@ -697,7 +698,7 @@ export function ProjectTools({
               ))}
             </CardContent>
           </Card>
-          {(["codex", "claude"] as const).map((client) => {
+          {CLIENTS.map((client) => {
             return (
               <Card key={client}>
                 <CardHeader className="flex-row items-start justify-between gap-4 flex-wrap">
@@ -717,13 +718,11 @@ export function ProjectTools({
                     <div>
                       <CardTitle>
                         <label htmlFor={`client-${client}`}>
-                          {client === "codex" ? "Codex" : "Claude Code"}
+                          {clientName(client)}
                         </label>
                       </CardTitle>
                       <CardDescription className="mt-2 mono">
-                        {client === "codex"
-                          ? ".codex/config.toml"
-                          : ".mcp.json"}
+                        {clientPath(client)}
                       </CardDescription>
                     </div>
                   </div>
@@ -816,7 +815,7 @@ export function ProjectTools({
               {engines.includes("rea") && (
                 <p className="text-xs text-muted-foreground leading-6 mt-2">
                   {t(
-                    "REA 由 Codex / Claude Code 按需启动，无需在桌面启动实例或建立 CodeGraph 索引。退出桌面应用不影响客户端的 REA 进程。",
+                    "REA 由 Codex、Claude Code、Cursor 或 Devin 按需启动，无需在桌面启动实例或建立 CodeGraph 索引。退出桌面应用不影响客户端的 REA 进程。",
                   )}{" "}
                   {t(
                     "配置后重新加载客户端并批准 MCP。测试连接会临时启动 REA，仅验证握手和工具列表，完成后回收测试进程。",
@@ -1177,7 +1176,7 @@ export function ProjectTools({
                 <code>{previousRootPreview}</code>
                 <p>
                   {t(
-                    "清理旧目录中的 Codex / Claude Code 条目。请核对下方每个文件路径和删除内容。",
+                    "清理旧目录中各客户端的受管条目。请核对下方每个文件路径和删除内容。",
                   )}
                 </p>
               </AlertDescription>

@@ -150,7 +150,7 @@ async fn disabled_tools_follow_codex_entries_and_claude_deny_rules() {
     assert!(!codex.exists());
     assert_eq!(deny(), ["Bash(rm *)"]);
 
-    for client in ["codex", "claude"] {
+    for client in crate::configuration::CLIENTS {
         let applied = crate::commands::set_mcp_configuration(
             state,
             project.id.clone(),
@@ -177,7 +177,9 @@ async fn disabled_tools_follow_codex_entries_and_claude_deny_rules() {
         saved["disabled"],
         serde_json::json!(["binary_session", "inspect_wasm_artifact"])
     );
-    assert_eq!(saved["updated"].as_array().unwrap().len(), 2);
+    // Codex and Devin entries plus Claude Code deny rules; Cursor needs the
+    // known tool list for its allowlist.
+    assert_eq!(saved["updated"].as_array().unwrap().len(), 3);
     assert_eq!(saved["failed"], serde_json::json!([]));
     assert_eq!(codex_tools(), ["binary_session", "inspect_wasm_artifact"]);
     assert_eq!(

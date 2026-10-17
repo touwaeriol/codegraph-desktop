@@ -1,7 +1,8 @@
-//! One-click activation: start an engine for a project and register it with
-//! the active client, or stop it and remove that registration. REA has no
-//! managed process, so only its registration changes.
-use crate::{commands, i18n::tr, models::*, AppState};
+//! One-click activation. Each client switch registers an engine with that
+//! client, starting the engine first; turning off its last client stops it.
+//! The sidebar shortcut enables with the default client and disables
+//! everywhere. REA has no managed process, so only its registrations change.
+use crate::{commands, configuration, i18n::tr, models::*, AppState};
 use std::{sync::atomic::Ordering, time::Duration};
 use tauri::Manager;
 
@@ -11,7 +12,10 @@ pub const ENVIRONMENT_REQUIRED: &str = "ENVIRONMENT_REQUIRED";
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Activation {
-    client: String,
+    /// Clients whose configuration changed.
+    clients: Vec<String>,
+    /// Whether the engine runs afterwards.
+    running: bool,
     warnings: Vec<String>,
 }
 
@@ -21,6 +25,7 @@ pub async fn set_engine_enabled(
     project_id: String,
     engine: String,
     enabled: bool,
+    client: Option<String>,
 ) -> Result<Activation> {
     let state = app.state::<AppState>();
     if !["codegraph", "serena", "warpgrep", "rea"].contains(&engine.as_str()) {
@@ -29,18 +34,57 @@ pub async fn set_engine_enabled(
             tr("不支持的引擎", "Unknown engine"),
         ));
     }
+    if client
+        .as_deref()
+        .is_some_and(|client| !configuration::CLIENTS.contains(&client))
+    {
+        return Err(AppError::new(
+            "INVALID_CLIENT",
+            tr("不支持的客户端", "Unknown client"),
+        ));
+    }
     state.project(&project_id)?;
-    let client = commands::settings(&state)?.active_client;
-    let mut warnings = vec![];
     if enabled {
-        warnings = prepare(&state, &engine).await?;
+        let client = match client {
+            Some(client) => client,
+            None => commands::settings(&state)?.active_client,
+        };
+        let warnings = prepare(&state, &engine).await?;
         operate(&app, &project_id, &engine, "start").await?;
         configure(&state, &project_id, &client, &engine, true).await?;
-    } else {
-        operate(&app, &project_id, &engine, "stop").await?;
-        configure(&state, &project_id, &client, &engine, false).await?;
+        return Ok(Activation {
+            clients: vec![client],
+            running: true,
+            warnings,
+        });
     }
-    Ok(Activation { client, warnings })
+    let clients = match client {
+        Some(client) => vec![client],
+        None => configured(&state, &project_id, &engine)?,
+    };
+    for client in &clients {
+        configure(&state, &project_id, client, &engine, false).await?;
+    }
+    let running = !configured(&state, &project_id, &engine)?.is_empty();
+    if !running {
+        operate(&app, &project_id, &engine, "stop").await?;
+    }
+    Ok(Activation {
+        clients,
+        running,
+        warnings: vec![],
+    })
+}
+
+/// Clients whose configuration currently registers this app's engine.
+fn configured(state: &AppState, id: &str, engine: &str) -> Result<Vec<String>> {
+    let project = state.project(id)?;
+    let target = commands::binding_for(state, id, Some(engine))?;
+    Ok(configuration::status(&project, &target)
+        .into_iter()
+        .filter(|status| status.state == "configured")
+        .map(|status| status.client)
+        .collect())
 }
 
 fn required(summary: &str, detail: &str) -> AppError {

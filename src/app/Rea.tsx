@@ -86,7 +86,7 @@ export function ReaPanel({
           <code className="block text-xs break-all">{REA_COMMAND}</code>
           <p className="text-sm text-muted-foreground leading-6">
             {t(
-              "REA 由 Codex / Claude Code 按需启动，无需在桌面启动实例或建立 CodeGraph 索引。退出桌面应用不影响客户端的 REA 进程。",
+              "REA 由 Codex、Claude Code、Cursor 或 Devin 按需启动，无需在桌面启动实例或建立 CodeGraph 索引。退出桌面应用不影响客户端的 REA 进程。",
             )}
           </p>
           <p className="text-sm text-muted-foreground leading-6">
@@ -372,7 +372,7 @@ export function ReaSettings() {
       )}
       <p className="mt-3 text-xs text-muted-foreground leading-6">
         {t(
-          "变量会写入项目的 .codex/config.toml 或 .mcp.json；保存后自动更新已由本应用注入 REA 的项目配置，重新加载客户端后生效。",
+          "变量会写入各客户端的项目 MCP 配置；保存后自动更新已由本应用注入 REA 的项目配置，重新加载客户端后生效。",
         )}
       </p>
       <EngineTools engine="rea" />

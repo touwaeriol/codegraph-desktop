@@ -40,7 +40,10 @@ export interface Settings {
   appDataDir: string;
 }
 export interface Activation {
-  client: Client;
+  /** Clients whose configuration changed. */
+  clients: Client[];
+  /** Whether the engine runs afterwards. */
+  running: boolean;
   warnings: string[];
 }
 export interface Environment {
@@ -94,7 +97,7 @@ export interface ConfigStatus {
   state: "missing" | "configured" | "repair" | "parseError";
   message: string | null;
 }
-export type Client = "codex" | "claude";
+export type Client = "codex" | "claude" | "cursor" | "devin";
 export type Engine = "codegraph" | "serena" | "warpgrep" | "rea";
 export interface SerenaSnapshot {
   state: RuntimeSnapshot["state"];

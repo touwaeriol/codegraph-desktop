@@ -51,11 +51,15 @@ The Windows installer automatically uses Simplified Chinese on Chinese-language 
 
 ## One-click activation
 
-The sidebar shows one colored marker per MCP next to each project: C (CodeGraph), S (Serena), W (WarpGrep) and R (REA). A filled marker means the engine is running (for REA: registered with the current client); markers pulse while starting or stopping and show a red outline on error.
+The sidebar shows one colored marker per MCP next to each project: C (CodeGraph), S (Serena), W (WarpGrep) and R (REA). A filled marker means the engine is running (for REA: registered with at least one client); markers pulse while starting or stopping and show a red outline on error.
 
-Click a marker, or the switch in a project's engine list, to enable that engine: the desktop starts it for the project and, once it is running, adds it to the **current client's** project configuration. Click again to stop it and remove that client's entry. REA has no managed process, so only its registration changes. Choose the current client (Codex or Claude Code) under **Icons enable in** in the sidebar; it is shared with the MCP configuration list and kept across restarts. A failed start writes no configuration. Missing prerequisites are reported directly with an **Open Settings** action: no CodeGraph or Serena entry (Serena is detected automatically first when none is saved), no Morph API key for WarpGrep, or no `npx` for REA. A Node.js version outside REA's supported range only produces a warning.
+Four clients are supported, each through its project-level file: Codex (`.codex/config.toml`), Claude Code (`.mcp.json`), Cursor (`.cursor/mcp.json`) and Devin (`.devin/mcp_config.json`). Global client configuration is not modified.
 
-A project's four engines are listed vertically with their run state, whether they are registered with the current client, and the activation switch; selecting a row switches the Overview, MCP configuration and logs below.
+A project's four engines are listed vertically with their run state and one switch per client. Turning on a client's switch starts the engine if needed and, once it is running, adds it to that client's project configuration. Turning a switch off removes only that client's entry; the engine stops when its last client is turned off. REA has no managed process, so only its registrations change. Selecting a row switches the Overview, MCP configuration and logs below.
+
+Sidebar markers are shortcuts: clicking one starts the engine and adds it to the default client chosen under **Icons enable in**; clicking again stops it and removes every entry this app wrote for it. The default client is shared with the MCP configuration list and kept across restarts. A failed start writes no configuration. Missing prerequisites are reported directly with an **Open Settings** action: no CodeGraph or Serena entry (Serena is detected automatically first when none is saved), no Morph API key for WarpGrep, or no `npx` for REA. A Node.js version outside REA's supported range only produces a warning.
+
+Clients load project configuration differently: Cursor and Devin ask you to enable or trust project MCP servers, and Devin looks for `.devin/mcp_config.json` at the Git repository root. Tools disabled in Settings become a disabled list for Codex and Devin, an allowlist of the remaining tools for Cursor (after the tool list has been fetched once), and deny rules in `.claude/settings.json` for Claude Code.
 
 When CodeGraph starts for a project without an index, the desktop first runs `codegraph init --yes` and then starts it; the operation can be cancelled. This applies to manual starts, one-click activation, **Start all CodeGraph** and resuming after a restart. Sync and rebuild on the **Code index** card are unchanged.
 
@@ -153,7 +157,7 @@ Detailed engineering documents are currently in Chinese:
 2. Projects do not share running instances, index databases, or request queues.
 3. Codex and Claude Code for the same project share its instance. Adding a client does not start a second CodeGraph instance.
 4. Projects can share one CodeGraph installation; separate instances do not require repeated installations.
-5. MCP settings are written to the project's `.codex/config.toml` and `.mcp.json`. Global client configuration is not modified.
+5. MCP settings are written to the project's `.codex/config.toml`, `.mcp.json`, `.cursor/mcp.json` and `.devin/mcp_config.json`. Global client configuration is not modified.
 6. Access is local-only by default. Exiting stops managed services; closing the window leaves the application running in the tray by default.
 
 ## Reading notes

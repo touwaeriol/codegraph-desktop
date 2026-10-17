@@ -103,10 +103,10 @@ const assert = require("node:assert/strict");
           if (command === "list_warpgrep_snapshots")
             return { fixture: engineSnapshot("warpgrep") };
           if (command === "get_client_config_status")
-            return ["codex", "claude"].map((client) => ({
+            return ["codex", "claude", "cursor", "devin"].map((client) => ({
               client,
               state: test.configs[`${args.engine}:${client}`] ?? "missing",
-              path: client === "codex" ? ".codex/config.toml" : ".mcp.json",
+              path: `.${client}/mcp.json`,
               message: null,
             }));
           if (command === "set_engine_enabled") {
@@ -115,13 +115,33 @@ const assert = require("node:assert/strict");
                 code: "ENVIRONMENT_REQUIRED",
                 message: "WARPGREP_KEY_FIXTURE",
               };
-            if (args.engine !== "rea") test.running[args.engine] = args.enabled;
-            test.configs[`${args.engine}:${test.activeClient}`] = args.enabled
-              ? "configured"
-              : "missing";
+            // Mirrors activation.rs: enabling starts the engine and writes one
+            // client; disabling removes one client, or every client from the
+            // sidebar, and stops the engine once no client remains.
+            const all = ["codex", "claude", "cursor", "devin"];
+            const configured = () =>
+              all.filter(
+                (client) =>
+                  test.configs[`${args.engine}:${client}`] === "configured",
+              );
+            const clients = args.enabled
+              ? [args.client ?? test.activeClient]
+              : args.client
+                ? [args.client]
+                : configured();
+            for (const client of clients)
+              test.configs[`${args.engine}:${client}`] = args.enabled
+                ? "configured"
+                : "missing";
+            const running = args.enabled || configured().length > 0;
+            if (args.engine !== "rea") test.running[args.engine] = running;
             return {
-              client: test.activeClient,
-              warnings: args.engine === "rea" ? ["NODE_WARNING_FIXTURE"] : [],
+              clients,
+              running,
+              warnings:
+                args.engine === "rea" && args.enabled
+                  ? ["NODE_WARNING_FIXTURE"]
+                  : [],
             };
           }
           if (
@@ -158,55 +178,103 @@ const assert = require("node:assert/strict");
       );
     const engines = page.getByRole("group", { name: "项目引擎" });
     await engines.getByRole("button", { name: /CodeGraph/ }).waitFor();
+    const clientSwitch = (engine, client) =>
+      page.getByRole("switch", { name: `在 ${client} 中启用 ${engine}` });
+    const waitChecked = (engine, client, checked) =>
+      page.waitForFunction(
+        ([label, checked]) =>
+          document.querySelector(`[aria-label="${label}"]`)?.checked ===
+          checked,
+        [`在 ${client} 中启用 ${engine}`, checked],
+      );
+    const last = async () => (await calls("set_engine_enabled")).at(-1);
 
-    // The sidebar marker starts the engine and writes the active client.
+    // The sidebar marker starts the engine and writes the default client.
     await marker("CodeGraph").click();
     await waitState("CodeGraph", "running");
-    assert.deepEqual((await calls("set_engine_enabled")).at(-1), {
+    assert.deepEqual(await last(), {
       projectId: "fixture",
       engine: "codegraph",
       enabled: true,
+      client: null,
     });
-    await page
-      .getByTestId("engine-row-codegraph")
-      .getByText("已注入 Codex")
-      .waitFor();
-    await marker("CodeGraph").click();
-    await waitState("CodeGraph", "stopped");
-    assert.equal((await calls("set_engine_enabled")).at(-1).enabled, false);
+    await waitChecked("CodeGraph", "Codex", true);
+    for (const client of ["Claude Code", "Cursor", "Devin"])
+      assert.equal(await clientSwitch("CodeGraph", client).isChecked(), false);
 
-    // The client choice is global: the sidebar switch drives the MCP list.
-    await page
-      .getByRole("group", { name: "图标启用写入的客户端" })
-      .getByRole("button", { name: "Claude Code", exact: true })
-      .click();
+    // Each row has one switch per client; the engine keeps running until its
+    // last client is turned off.
+    await clientSwitch("CodeGraph", "Cursor").click();
+    await waitChecked("CodeGraph", "Cursor", true);
+    assert.deepEqual(await last(), {
+      projectId: "fixture",
+      engine: "codegraph",
+      enabled: true,
+      client: "cursor",
+    });
+    await clientSwitch("CodeGraph", "Codex").click();
+    await waitChecked("CodeGraph", "Codex", false);
+    await page.getByText("CodeGraph 已从 Codex 项目配置移除").waitFor();
+    await waitState("CodeGraph", "running");
+    await clientSwitch("CodeGraph", "Cursor").click();
+    await waitChecked("CodeGraph", "Cursor", false);
+    await waitState("CodeGraph", "stopped");
+    await page.getByText("CodeGraph 已停用，并移除 Cursor 项目配置").waitFor();
+    assert.equal((await last()).client, "cursor");
+
+    // The sidebar picks the default client among all four.
+    const picker = page.getByRole("combobox", { name: "图标启用写入的客户端" });
+    assert.deepEqual(await picker.locator("option").allTextContents(), [
+      "Codex",
+      "Claude Code",
+      "Cursor",
+      "Devin",
+    ]);
+    await picker.selectOption("claude");
     assert.deepEqual((await calls("set_active_client")).at(-1), {
       client: "claude",
     });
     await page.getByRole("tab", { name: "MCP 配置" }).click();
-    await page
-      .getByTestId("mcp-list")
+    const mcpList = page.getByTestId("mcp-list");
+    await mcpList
       .getByRole("button", { name: "Claude Code", exact: true })
       .and(page.locator('[aria-pressed="true"]'))
       .waitFor();
+    await mcpList.getByRole("button", { name: "Devin", exact: true }).click();
+    await mcpList.getByText(".devin/mcp_config.json").waitFor();
 
-    // REA only toggles its registration; version warnings are surfaced.
+    // REA only toggles registrations; version warnings are surfaced.
     await marker("REA").click();
     await waitState("REA", "running");
     await page.getByText("NODE_WARNING_FIXTURE").waitFor();
-    await page
-      .getByTestId("engine-row-rea")
-      .getByText("已注入 Claude Code")
-      .waitFor();
+    // The MCP list switched the default client to Devin.
+    assert.equal((await calls("set_active_client")).at(-1).client, "devin");
+    await waitChecked("REA", "Devin", true);
 
-    // The engine list switch behaves like the marker.
-    await page.getByRole("switch", { name: "启用 Serena" }).click();
+    // A client switch on a stopped engine starts it for that client.
+    await clientSwitch("Serena", "Devin").click();
     await waitState("Serena", "running");
-    assert.deepEqual((await calls("set_engine_enabled")).at(-1), {
+    assert.deepEqual(await last(), {
       projectId: "fixture",
       engine: "serena",
       enabled: true,
+      client: "devin",
     });
+    await waitChecked("Serena", "Devin", true);
+
+    // Disabling from the sidebar removes every client registration.
+    await clientSwitch("REA", "Cursor").click();
+    await waitChecked("REA", "Cursor", true);
+    await marker("REA").click();
+    await waitState("REA", "stopped");
+    assert.deepEqual(await last(), {
+      projectId: "fixture",
+      engine: "rea",
+      enabled: false,
+      client: null,
+    });
+    await waitChecked("REA", "Devin", false);
+    await waitChecked("REA", "Cursor", false);
 
     // Missing prerequisites point straight to Settings.
     await marker("WarpGrep").click();
@@ -224,7 +292,7 @@ const assert = require("node:assert/strict");
     }
     assert.deepEqual(errors, []);
     console.log(
-      "Activation UI: sidebar markers, engine list switch, shared client, REA warnings and missing-environment prompt passed",
+      "Activation UI: sidebar markers, per-client engine switches, default client picker, REA warnings and missing-environment prompt passed",
     );
   } finally {
     await browser.close();

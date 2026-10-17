@@ -7,6 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { CLIENTS, clientName as displayName, clientPath } from "@/lib/clients";
 import { t } from "@/lib/i18n";
 import type { Client, ConfigStatus, Engine } from "@/lib/types";
 
@@ -46,7 +47,7 @@ export function McpList({
   probe: (engine: Engine) => void;
   review: (engine: Engine, client: Client) => void;
 }) {
-  const clientName = client === "codex" ? "Codex" : "Claude Code";
+  const clientName = displayName(client);
   const clientStatuses = statuses.filter((status) => status.client === client);
   const configured = clientStatuses.filter(
     (status) => status.state === "configured",
@@ -75,7 +76,7 @@ export function McpList({
           role="group"
           aria-label={t("MCP 客户端")}
         >
-          {(["codex", "claude"] as const).map((value) => (
+          {CLIENTS.map((value) => (
             <button
               key={value}
               type="button"
@@ -83,7 +84,7 @@ export function McpList({
               disabled={busy}
               onClick={() => setClient(value)}
             >
-              {value === "codex" ? "Codex" : "Claude Code"}
+              {displayName(value)}
             </button>
           ))}
         </div>
@@ -218,9 +219,7 @@ export function McpList({
         </ul>
         <div className="mcp-list-footer">
           <span>{t("开关自动保存，客户端需重新加载 MCP。")}</span>
-          <code title={clientStatuses[0]?.path}>
-            {client === "codex" ? ".codex/config.toml" : ".mcp.json"}
-          </code>
+          <code title={clientStatuses[0]?.path}>{clientPath(client)}</code>
         </div>
       </CardContent>
     </Card>

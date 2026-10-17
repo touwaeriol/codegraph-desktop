@@ -58,8 +58,8 @@ export function EngineMarker({
       ? state === "starting" || state === "stopping"
         ? labels[state]
         : configured
-          ? t("已注入当前客户端")
-          : t("未注入当前客户端")
+          ? t("已注入客户端")
+          : t("未注入任何客户端")
       : state
         ? labels[state]
         : t("尚未获取");
@@ -278,7 +278,9 @@ export function EngineConnectionCard({
       </CardHeader>
       <CardContent className="flex items-center justify-between gap-4 flex-wrap">
         <div className="min-w-0">
-          <p className="text-sm text-muted-foreground">Codex · Claude Code</p>
+          <p className="text-sm text-muted-foreground">
+            Codex · Claude Code · Cursor · Devin
+          </p>
           {endpoint && (
             <div className="flex items-center gap-2 mt-2">
               <code className="text-xs break-all">{endpoint}</code>

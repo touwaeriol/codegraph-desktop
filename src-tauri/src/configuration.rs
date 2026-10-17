@@ -7,6 +7,54 @@ use std::{
     io::Write,
     path::Path,
 };
+/// MCP clients whose project configuration this app manages.
+pub const CLIENTS: [&str; 4] = ["codex", "claude", "cursor", "devin"];
+/// The project file each client reads its MCP servers from.
+pub fn client_path(client: &str) -> Option<&'static str> {
+    Some(match client {
+        "codex" => ".codex/config.toml",
+        "claude" => ".mcp.json",
+        "cursor" => ".cursor/mcp.json",
+        "devin" => ".devin/mcp_config.json",
+        _ => return None,
+    })
+}
+pub fn client_name(client: &str) -> &'static str {
+    match client {
+        "codex" => "Codex",
+        "claude" => "Claude Code",
+        "cursor" => "Cursor",
+        "devin" => "Devin",
+        _ => "?",
+    }
+}
+/// Clients using a JSON `mcpServers` object rather than Codex's TOML.
+fn is_json(client: &str) -> bool {
+    matches!(client, "claude" | "cursor" | "devin")
+}
+/// The entry key naming the transport: Claude Code uses `type`, Devin
+/// `transport`; Cursor infers it from `command` or `url`.
+fn kind_key(client: &str) -> Option<&'static str> {
+    match client {
+        "claude" => Some("type"),
+        "devin" => Some("transport"),
+        _ => None,
+    }
+}
+/// Devin also accepts Windsurf's `serverUrl` for remote servers.
+fn json_url<'a>(client: &str, server: &'a serde_json::Value) -> Option<&'a serde_json::Value> {
+    server.get("url").or_else(|| {
+        (client == "devin")
+            .then(|| server.get("serverUrl"))
+            .flatten()
+    })
+}
+fn invalid_client() -> AppError {
+    AppError::new(
+        "INVALID_CLIENT",
+        crate::i18n::tr("不支持的客户端", "Unknown client"),
+    )
+}
 pub trait ConfigTarget {
     fn name(&self) -> &str;
     fn endpoint(&self) -> String;
@@ -17,6 +65,11 @@ pub trait ConfigTarget {
     /// Tools the client hides from the model; Codex writes them into the entry.
     fn disabled_tools(&self) -> &[String] {
         &[]
+    }
+    /// Cursor's allowlist: every known tool that is not disabled, or `None`
+    /// when nothing is disabled or the tools are not known yet.
+    fn enabled_tools(&self) -> Option<Vec<String>> {
+        None
     }
 }
 impl ConfigTarget for HttpBinding {
@@ -36,6 +89,8 @@ pub struct Target {
     pub authorization: Option<String>,
     pub stdio: Option<StdioTarget>,
     pub disabled_tools: Vec<String>,
+    /// Tools the engine last offered, used to build Cursor's allowlist.
+    pub known_tools: Vec<String>,
 }
 pub struct StdioTarget {
     pub command: String,
@@ -60,6 +115,15 @@ impl ConfigTarget for Target {
     }
     fn disabled_tools(&self) -> &[String] {
         &self.disabled_tools
+    }
+    fn enabled_tools(&self) -> Option<Vec<String>> {
+        (!self.disabled_tools.is_empty() && !self.known_tools.is_empty()).then(|| {
+            self.known_tools
+                .iter()
+                .filter(|tool| !self.disabled_tools.contains(tool))
+                .cloned()
+                .collect()
+        })
     }
 }
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -253,7 +317,7 @@ fn merge(
             doc["mcp_servers"][name] = toml_edit::Item::Table(t);
         }
         Ok((doc.to_string(), conflict, old_hash))
-    } else if client == "claude" {
+    } else if is_json(client) {
         let mut doc: serde_json::Value = if before.trim().is_empty() {
             serde_json::json!({})
         } else {
@@ -279,23 +343,7 @@ fn merge(
         if remove {
             servers.remove(name);
         } else {
-            servers.insert(name.into(), {
-                if let Some(stdio) = binding.stdio() {
-                    let mut value = serde_json::json!({
-                        "type": "stdio", "command": stdio.command, "args": stdio.args
-                    });
-                    if !stdio.env.is_empty() {
-                        value["env"] = serde_json::json!(stdio.env);
-                    }
-                    value
-                } else {
-                    let mut value = serde_json::json!({"type":"http","url":binding.endpoint()});
-                    if let Some(auth) = binding.auth() {
-                        value["headers"] = serde_json::json!({"Authorization":auth});
-                    }
-                    value
-                }
-            });
+            servers.insert(name.into(), json_entry(client, binding));
         }
         Ok((
             format!("{}\n", serde_json::to_string_pretty(&doc).unwrap()),
@@ -303,8 +351,49 @@ fn merge(
             old,
         ))
     } else {
-        Err(AppError::new("INVALID_CLIENT", "不支持的客户端"))
+        Err(invalid_client())
     }
+}
+/// The entry a JSON client reads for `binding`.
+fn json_entry(client: &str, binding: &(impl ConfigTarget + ?Sized)) -> serde_json::Value {
+    let mut entry = serde_json::Map::new();
+    if let Some(key) = kind_key(client) {
+        let kind = if binding.stdio().is_some() {
+            "stdio"
+        } else {
+            "http"
+        };
+        entry.insert(key.into(), kind.into());
+    }
+    if let Some(stdio) = binding.stdio() {
+        entry.insert("command".into(), stdio.command.clone().into());
+        entry.insert("args".into(), serde_json::json!(stdio.args));
+        if !stdio.env.is_empty() {
+            entry.insert("env".into(), serde_json::json!(stdio.env));
+        }
+    } else {
+        entry.insert("url".into(), binding.endpoint().into());
+        if let Some(auth) = binding.auth() {
+            entry.insert(
+                "headers".into(),
+                serde_json::json!({ "Authorization": auth }),
+            );
+        }
+    }
+    // Devin hides tools listed in the entry, Cursor offers only the listed
+    // ones; Claude Code uses deny rules.
+    if client == "devin" && !binding.disabled_tools().is_empty() {
+        entry.insert(
+            "disabledTools".into(),
+            serde_json::json!(binding.disabled_tools()),
+        );
+    }
+    if client == "cursor" {
+        if let Some(enabled) = binding.enabled_tools() {
+            entry.insert("enabledTools".into(), serde_json::json!(enabled));
+        }
+    }
+    serde_json::Value::Object(entry)
 }
 pub fn entry_fingerprint(content: &str, client: &str, name: &str) -> Result<Option<String>> {
     let content = content.trim_start_matches('\u{feff}');
@@ -326,7 +415,7 @@ pub fn entry_fingerprint(content: &str, client: &str, name: &str) -> Result<Opti
                 .get(name)
                 .map(|item| hash(item.to_string().as_bytes())))
         }
-        "claude" => {
+        c if is_json(c) => {
             let doc: serde_json::Value = if content.trim().is_empty() {
                 serde_json::json!({})
             } else {
@@ -350,7 +439,7 @@ pub fn entry_fingerprint(content: &str, client: &str, name: &str) -> Result<Opti
                 .get(name)
                 .map(|item| hash(item.to_string().as_bytes())))
         }
-        _ => Err(AppError::new("INVALID_CLIENT", "不支持的客户端")),
+        _ => Err(invalid_client()),
     }
 }
 pub fn preview(
@@ -421,7 +510,7 @@ fn preview_from(
     let mut choices = HashMap::new();
     for change in overrides {
         if !clients.contains(&change.client)
-            || !["codex", "claude"].contains(&change.client.as_str())
+            || !CLIENTS.contains(&change.client.as_str())
             || choices.insert(change.client.as_str(), change).is_some()
         {
             return Err(AppError::new(
@@ -443,13 +532,7 @@ fn preview_from(
         if files.iter().any(|f: &ConfigFile| &f.client == client) {
             continue;
         }
-        let path = root.join(if client == "codex" {
-            ".codex/config.toml"
-        } else if client == "claude" {
-            ".mcp.json"
-        } else {
-            return Err(AppError::new("INVALID_CLIENT", client));
-        });
+        let path = root.join(client_path(client).ok_or_else(invalid_client)?);
         safe_path(root, &path)?;
         let original = match inputs {
             Some(inputs) => inputs
@@ -487,10 +570,13 @@ fn preview_from(
             });
             continue;
         }
-        if client == "claude" && original.is_some() && before.trim().is_empty() {
+        if is_json(client) && original.is_some() && before.trim().is_empty() {
             return Err(AppError::new(
                 "CONFIG_PARSE_FAILED",
-                "现有 Claude Code JSON 文件为空，不能作为空配置覆盖",
+                crate::i18n::tr(
+                    "现有 JSON 配置文件为空，不能作为空配置覆盖",
+                    "The existing JSON configuration is empty and cannot be treated as an empty configuration",
+                ),
             ));
         }
         let legacy_name = format!("codegraph_project_{}", p.id.replace('-', ""));
@@ -787,14 +873,10 @@ fn apply_with(
     })
 }
 pub fn status(p: &Project, binding: &impl ConfigTarget) -> Vec<ConfigStatus> {
-    ["codex", "claude"]
+    CLIENTS
         .iter()
         .map(|client| {
-            let path = Path::new(&p.canonical_path).join(if *client == "codex" {
-                ".codex/config.toml"
-            } else {
-                ".mcp.json"
-            });
+            let path = Path::new(&p.canonical_path).join(client_path(client).unwrap());
             let mut item = ConfigStatus {
                 client: client.to_string(),
                 path: path.to_string_lossy().into(),
@@ -807,10 +889,13 @@ pub fn status(p: &Project, binding: &impl ConfigTarget) -> Vec<ConfigStatus> {
                     return Ok(());
                 }
                 let before = text(&bytes)?;
-                if *client == "claude" && bytes.is_some() && before.trim().is_empty() {
+                if is_json(client) && before.trim().is_empty() {
                     return Err(AppError::new(
                         "CONFIG_PARSE_FAILED",
-                        "现有 Claude Code JSON 文件为空",
+                        crate::i18n::tr(
+                            "现有 JSON 配置文件为空",
+                            "The existing JSON configuration is empty",
+                        ),
                     ));
                 }
                 let (name, id) = (binding.name().to_string(), &p.id);
@@ -1121,7 +1206,7 @@ mod recovery_tests {
         let dir = tempfile::tempdir().unwrap();
         let p = project(dir.path());
         let binding = test_binding();
-        for client in ["codex", "claude"] {
+        for client in CLIENTS {
             let legacy = format!("codegraph_project_{}", p.id.replace('-', ""));
             let initial = if client == "codex" {
                 "# keep comment\nmodel = 'existing-model'\n[mcp_servers.other]\ncommand = 'other-tool'\n"
@@ -1131,11 +1216,7 @@ mod recovery_tests {
             let before = merge(initial, client, &legacy, &p.id, &binding, false)
                 .unwrap()
                 .0;
-            let path = dir.path().join(if client == "codex" {
-                ".codex/config.toml"
-            } else {
-                ".mcp.json"
-            });
+            let path = dir.path().join(client_path(client).unwrap());
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, &before).unwrap();
             let mut managed = HashMap::new();
@@ -1342,16 +1423,25 @@ fn validate_toml_server(server: &dyn toml_edit::TableLike) -> Result<()> {
     }
     Ok(())
 }
-fn validate_json_server(server: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
-    for key in ["command", "url", "type"] {
+fn validate_json_server(
+    client: &str,
+    server: &serde_json::Map<String, serde_json::Value>,
+) -> Result<()> {
+    let kind = kind_key(client).unwrap_or("type");
+    for key in ["command", "url", "serverUrl", kind] {
         if server.get(key).is_some_and(|v| !v.is_string()) {
             return Err(invalid_structure(format!("MCP {key} 必须为字符串")));
         }
     }
+    let url = server.get("url").or_else(|| {
+        (client == "devin")
+            .then(|| server.get("serverUrl"))
+            .flatten()
+    });
     validate_transport(
         server.get("command").and_then(|v| v.as_str()),
-        server.get("url").and_then(|v| v.as_str()),
-        server.get("type").and_then(|v| v.as_str()),
+        url.and_then(|v| v.as_str()),
+        server.get(kind).and_then(|v| v.as_str()),
     )?;
     if let Some(args) = server.get("args") {
         if !args
@@ -1393,7 +1483,7 @@ fn validate_content(content: &str, client: &str) -> Result<()> {
             }
             Ok(())
         }
-        "claude" => {
+        c if is_json(c) => {
             let doc: serde_json::Value = serde_json::from_str(content)
                 .map_err(|_| invalid_structure("配置格式无效，请检查 TOML/JSON 语法"))?;
             let doc = doc
@@ -1407,12 +1497,12 @@ fn validate_content(content: &str, client: &str) -> Result<()> {
                     let server = server
                         .as_object()
                         .ok_or_else(|| invalid_structure(format!("MCP 服务 {name} 必须为对象")))?;
-                    validate_json_server(server)?;
+                    validate_json_server(client, server)?;
                 }
             }
             Ok(())
         }
-        _ => Err(AppError::new("INVALID_CLIENT", "不支持的客户端")),
+        _ => Err(invalid_client()),
     }
 }
 fn managed_fingerprint(
@@ -1482,27 +1572,51 @@ fn managed_fingerprint(
                             == authorization.as_deref()
                 })
         }
-        "claude" => {
+        c if is_json(c) => {
             let doc: serde_json::Value = serde_json::from_str(content)
                 .map_err(|_| invalid_structure("配置格式无效，请检查 TOML/JSON 语法"))?;
             doc.get("mcpServers")
                 .and_then(|v| v.get(name))
                 .is_some_and(|server| {
+                    let kind = kind_key(client)
+                        .and_then(|key| server.get(key))
+                        .map(|v| v.as_str());
+                    if client == "devin"
+                        && !server
+                            .get("disabledTools")
+                            .map_or(binding.disabled_tools().is_empty(), |tools| {
+                                *tools == serde_json::json!(binding.disabled_tools())
+                            })
+                    {
+                        return false;
+                    }
+                    if client == "cursor"
+                        && server.get("enabledTools")
+                            != binding
+                                .enabled_tools()
+                                .map(|v| serde_json::json!(v))
+                                .as_ref()
+                    {
+                        return false;
+                    }
                     if let Some(stdio) = binding.stdio() {
-                        return server
-                            .get("type")
-                            .is_none_or(|v| v.as_str() == Some("stdio"))
+                        return kind.is_none_or(|kind| kind == Some("stdio"))
                             && server.get("command").and_then(|v| v.as_str())
                                 == Some(stdio.command.as_str())
                             && server.get("args") == Some(&serde_json::json!(stdio.args))
                             && server.get("env").map_or(stdio.env.is_empty(), |env| {
                                 *env == serde_json::json!(stdio.env)
                             })
-                            && server.get("url").is_none()
+                            && json_url(client, server).is_none()
                             && server.get("headers").is_none();
                     }
-                    server.get("type").and_then(|v| v.as_str()) == Some("http")
-                        && server.get("url").and_then(|v| v.as_str()) == Some(endpoint.as_str())
+                    // Claude Code needs the explicit type for remote servers.
+                    (if client == "claude" {
+                        kind == Some(Some("http"))
+                    } else {
+                        kind.is_none_or(|kind| kind == Some("http"))
+                    }) && server.get("url").and_then(|v| v.as_str()) == Some(endpoint.as_str())
+                        && server.get("serverUrl").is_none()
                         && server.get("command").is_none()
                         && server.get("args").is_none()
                         && server
@@ -1526,7 +1640,7 @@ mod override_tests {
     use super::*;
     #[test]
     fn automatic_toggles_preserve_other_entries_and_reject_unmanaged_or_edited_entries() {
-        for client in ["codex", "claude"] {
+        for client in CLIENTS {
             let (dir, p, _) = fixture();
             let data = tempfile::tempdir().unwrap();
             let binding = crate::rea::binding(Default::default());
@@ -1600,6 +1714,7 @@ mod override_tests {
                     authorization: Some(cg.authorization()),
                     stdio: None,
                     disabled_tools: vec![],
+                    known_tools: vec![],
                 },
                 Target {
                     name: "serena".into(),
@@ -1607,10 +1722,11 @@ mod override_tests {
                     authorization: None,
                     stdio: None,
                     disabled_tools: vec![],
+                    known_tools: vec![],
                 },
                 crate::rea::binding(Default::default()),
             ];
-            let clients: Vec<String> = vec!["codex".into(), "claude".into()];
+            let clients: Vec<String> = CLIENTS.map(String::from).to_vec();
             let originals = [
                 "# preserved\nmodel = 'existing'\n[mcp_servers.other]\ncommand = 'other'\n",
                 "{\"mcpServers\":{\"other\":{\"command\":\"other\"}}}",
@@ -1638,7 +1754,7 @@ mod override_tests {
                 &choices,
             )
             .unwrap();
-            assert_eq!(preview.files.len(), 2);
+            assert_eq!(preview.files.len(), clients.len());
             assert_eq!(preview.ownership.len(), 3);
             for (f, before) in preview.files.iter().zip(originals) {
                 assert_eq!(f.before, before);
@@ -1699,6 +1815,7 @@ mod override_tests {
                 authorization: Some(cg.authorization()),
                 stdio: None,
                 disabled_tools: vec![],
+                known_tools: vec![],
             },
             Target {
                 name: "serena".into(),
@@ -1706,10 +1823,11 @@ mod override_tests {
                 authorization: None,
                 stdio: None,
                 disabled_tools: vec![],
+                known_tools: vec![],
             },
             crate::rea::binding(Default::default()),
         ];
-        let clients: Vec<String> = vec!["codex".into(), "claude".into()];
+        let clients: Vec<String> = CLIENTS.map(String::from).to_vec();
         let preview =
             preview_many(&p, &clients, "install", &bindings, &HashMap::new(), &[]).unwrap();
         let failed = apply_with(&preview, dir.path(), data.path(), Some(1)).unwrap();
@@ -1803,7 +1921,7 @@ mod override_tests {
     fn rea_stdio_configuration_tracks_commands_and_preserves_http_engines() {
         let (dir, p, codegraph) = fixture();
         let data = tempfile::tempdir().unwrap();
-        let clients: Vec<String> = vec!["codex".into(), "claude".into()];
+        let clients: Vec<String> = CLIENTS.map(String::from).to_vec();
         let cg = preview(&p, &clients, "install", &codegraph, &HashMap::new()).unwrap();
         apply(&cg, dir.path(), data.path()).unwrap();
         let rea = crate::rea::binding(Default::default());
@@ -1826,7 +1944,9 @@ mod override_tests {
             } else {
                 let doc: serde_json::Value = serde_json::from_str(&file.after).unwrap();
                 let server = &doc["mcpServers"]["rea"];
-                assert_eq!(server["type"], "stdio");
+                if let Some(key) = kind_key(&file.client) {
+                    assert_eq!(server[key], "stdio");
+                }
                 assert_eq!(server["command"], expected.command);
                 assert_eq!(server["args"], serde_json::json!(expected.args));
                 assert!(server.get("url").is_none());
@@ -1879,7 +1999,7 @@ mod override_tests {
     fn rea_environment_is_written_and_tracked_as_part_of_the_managed_entry() {
         let (dir, p, _) = fixture();
         let data = tempfile::tempdir().unwrap();
-        let clients: Vec<String> = vec!["codex".into(), "claude".into()];
+        let clients: Vec<String> = CLIENTS.map(String::from).to_vec();
         let plain = crate::rea::binding(Default::default());
         let install = preview(&p, &clients, "install", &plain, &HashMap::new()).unwrap();
         for file in &install.files {
@@ -1928,29 +2048,45 @@ mod override_tests {
     fn disabled_tools_are_part_of_managed_http_entries() {
         let (dir, p, _) = fixture();
         let data = tempfile::tempdir().unwrap();
-        let clients: Vec<String> = vec!["codex".into(), "claude".into()];
+        let clients = CLIENTS.map(String::from);
         let target = |disabled_tools: Vec<String>| Target {
             name: "serena".into(),
             endpoint: "http://127.0.0.1:58310/mcp".into(),
             authorization: None,
             stdio: None,
             disabled_tools,
+            known_tools: vec![
+                "find_symbol".into(),
+                "rename_symbol".into(),
+                "write_memory".into(),
+            ],
         };
         let hidden = target(vec!["rename_symbol".into(), "write_memory".into()]);
         let change = preview(&p, &clients, "install", &hidden, &HashMap::new()).unwrap();
         for file in &change.files {
             validate_content(&file.after, &file.client).unwrap();
-            if file.client == "codex" {
-                let doc = file.after.parse::<toml_edit::DocumentMut>().unwrap();
-                let tools = doc["mcp_servers"]["serena"]["disabled_tools"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|v| v.as_str().unwrap())
-                    .collect::<Vec<_>>();
-                assert_eq!(tools, ["rename_symbol", "write_memory"]);
-            } else {
-                assert!(!file.after.contains("disabled_tools"));
+            let json = (file.client != "codex")
+                .then(|| serde_json::from_str::<serde_json::Value>(&file.after).unwrap());
+            match file.client.as_str() {
+                "codex" => {
+                    let doc = file.after.parse::<toml_edit::DocumentMut>().unwrap();
+                    let tools = doc["mcp_servers"]["serena"]["disabled_tools"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_str().unwrap())
+                        .collect::<Vec<_>>();
+                    assert_eq!(tools, ["rename_symbol", "write_memory"]);
+                }
+                "devin" => assert_eq!(
+                    json.unwrap()["mcpServers"]["serena"]["disabledTools"],
+                    serde_json::json!(["rename_symbol", "write_memory"])
+                ),
+                "cursor" => assert_eq!(
+                    json.unwrap()["mcpServers"]["serena"]["enabledTools"],
+                    serde_json::json!(["find_symbol"])
+                ),
+                _ => assert!(!file.after.contains("isabled")),
             }
         }
         apply(&change, dir.path(), data.path()).unwrap();
@@ -1960,16 +2096,69 @@ mod override_tests {
                 .map(|s| (s.client, s.state))
                 .collect::<HashMap<_, _>>()
         };
-        assert_eq!(states(&hidden)["codex"], "configured");
+        assert!(states(&hidden).values().all(|state| state == "configured"));
         let shown = states(&target(vec![]));
         assert_eq!(shown["codex"], "repair");
+        assert_eq!(shown["devin"], "repair");
+        assert_eq!(shown["cursor"], "repair");
         assert_eq!(shown["claude"], "configured");
+    }
+    #[test]
+    fn cursor_and_devin_entries_use_their_own_formats() {
+        let (dir, p, codegraph) = fixture();
+        let data = tempfile::tempdir().unwrap();
+        let clients = vec!["cursor".to_string(), "devin".to_string()];
+        let rea = crate::rea::binding(Default::default());
+        for binding in [&codegraph as &dyn ConfigTarget, &rea] {
+            let change =
+                preview_from(&p, &clients, "install", binding, &HashMap::new(), &[], None).unwrap();
+            for file in &change.files {
+                assert!(file
+                    .path
+                    .replace('\\', "/")
+                    .ends_with(client_path(&file.client).unwrap()));
+                let doc: serde_json::Value = serde_json::from_str(&file.after).unwrap();
+                let entry = &doc["mcpServers"][binding.name()];
+                let stdio = binding.stdio().is_some();
+                assert_eq!(entry["command"].is_string(), stdio);
+                assert_eq!(entry["url"].is_string(), !stdio);
+                assert!(entry.get("type").is_none());
+                if file.client == "devin" {
+                    assert_eq!(entry["transport"], if stdio { "stdio" } else { "http" });
+                } else {
+                    assert!(entry.get("transport").is_none());
+                }
+            }
+            apply(&change, dir.path(), data.path()).unwrap();
+        }
+        for binding in [&codegraph as &dyn ConfigTarget, &rea] {
+            for client in &clients {
+                let path = dir.path().join(client_path(client).unwrap());
+                let content = std::fs::read_to_string(path).unwrap();
+                assert!(
+                    managed_fingerprint(&content, client, binding.name(), &p.id, binding)
+                        .unwrap()
+                        .is_some()
+                );
+            }
+        }
+        // Devin also reads Windsurf's `serverUrl`, so such entries stay valid.
+        validate_content(
+            r#"{"mcpServers":{"old":{"serverUrl":"http://127.0.0.1:1/mcp"}}}"#,
+            "devin",
+        )
+        .unwrap();
+        assert!(validate_content(
+            r#"{"mcpServers":{"old":{"serverUrl":"http://127.0.0.1:1/mcp"}}}"#,
+            "cursor",
+        )
+        .is_err());
     }
     #[test]
     fn serena_configuration_preserves_codegraph_and_tracks_separate_ownership() {
         let (_dir, p, codegraph) = fixture();
         let data = tempfile::tempdir().unwrap();
-        let clients: Vec<String> = vec!["codex".into(), "claude".into()];
+        let clients: Vec<String> = CLIENTS.map(String::from).to_vec();
         let cg = preview(&p, &clients, "install", &codegraph, &HashMap::new()).unwrap();
         apply(&cg, Path::new(&p.canonical_path), data.path()).unwrap();
         let serena = Target {
@@ -1978,6 +2167,7 @@ mod override_tests {
             authorization: None,
             stdio: None,
             disabled_tools: vec![],
+            known_tools: vec![],
         };
         let change = preview(&p, &clients, "install", &serena, &HashMap::new()).unwrap();
         let owned: HashMap<_, _> = change
@@ -2038,11 +2228,7 @@ mod override_tests {
         (dir, p, binding)
     }
     fn file_path(root: &Path, client: &str) -> std::path::PathBuf {
-        let path = root.join(if client == "codex" {
-            ".codex/config.toml"
-        } else {
-            ".mcp.json"
-        });
+        let path = root.join(client_path(client).unwrap());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         path
     }
@@ -2068,7 +2254,7 @@ mod override_tests {
     }
     #[test]
     fn overwrite_shows_full_replacement_and_restore_does_not_claim_foreign_service() {
-        for client in ["codex", "claude"] {
+        for client in CLIENTS {
             let (dir, p, binding) = fixture();
             let path = file_path(dir.path(), client);
             let original = if client == "codex" {
@@ -2093,7 +2279,7 @@ mod override_tests {
     }
     #[test]
     fn edit_preserves_exact_content_and_only_claims_matching_project_binding() {
-        for client in ["codex", "claude"] {
+        for client in CLIENTS {
             let (dir, p, binding) = fixture();
             let path = file_path(dir.path(), client);
             let mut content = merge("", client, "codegraph", &p.id, &binding, false)
@@ -2366,7 +2552,7 @@ mod http_config_tests {
     }
     #[test]
     fn old_stdio_config_migrates_only_when_preview_is_applied() {
-        for client in ["codex", "claude"] {
+        for client in CLIENTS {
             for old_id_name in [false, true] {
                 let dir = tempfile::tempdir().unwrap();
                 let p = project(dir.path());
@@ -2381,11 +2567,7 @@ mod http_config_tests {
                 } else {
                     serde_json::json!({"unrelated":true,"mcpServers":{name.clone():{"type":"stdio","command":"cg-mcp-connector.exe","args":["--project-id",p.id]}}}).to_string()
                 };
-                let path = dir.path().join(if client == "codex" {
-                    ".codex/config.toml"
-                } else {
-                    ".mcp.json"
-                });
+                let path = dir.path().join(client_path(client).unwrap());
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(&path, &before).unwrap();
                 assert_eq!(

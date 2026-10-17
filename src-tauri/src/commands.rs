@@ -1,4 +1,8 @@
-use crate::{configuration, models::*, persistence, AppState};
+use crate::{
+    configuration::{self, CLIENTS},
+    models::*,
+    persistence, AppState,
+};
 use rusqlite::OptionalExtension;
 use std::{
     collections::HashMap,
@@ -148,7 +152,6 @@ pub fn settings(state: &AppState) -> Result<Settings> {
         app_data_dir: state.data.to_string_lossy().into(),
     })
 }
-const CLIENTS: [&str; 2] = ["codex", "claude"];
 #[tauri::command]
 pub fn set_active_client(state: State<AppState>, client: String) -> Result<Settings> {
     if !CLIENTS.contains(&client.as_str()) {
@@ -429,6 +432,7 @@ pub(crate) fn binding_for(
                 authorization: Some(b.authorization()),
                 stdio: None,
                 disabled_tools: vec![],
+                known_tools: vec![],
             }
         }
         "serena" => crate::serena::binding(state, id)?,
@@ -442,6 +446,7 @@ pub(crate) fn binding_for(
         }
     };
     target.disabled_tools = crate::tools::disabled(state, &target.name)?;
+    target.known_tools = crate::tools::known(state, &target.name)?;
     Ok(target)
 }
 fn managed_key(engine: &str, client: &str) -> String {
@@ -705,7 +710,7 @@ pub async fn test_project_mcp(
 ) -> Result<ProbeResult> {
     let engine = engine.unwrap_or_else(|| "codegraph".into());
     let tools = probe_tools(&state, &project_id, &engine).await?;
-    crate::tools::remember(&state, &engine, &tools)?;
+    crate::tools::remember(&state, &engine, &tools).await?;
     let message = match engine.as_str() {
         "rea" => crate::i18n::tr(
             "REA MCP 握手与工具列表验证通过，测试进程已停止。分析引擎可用性需按任务另行确认；真实客户端连接需重新加载客户端。",
@@ -790,15 +795,7 @@ pub struct Resynced {
 }
 impl Resynced {
     pub fn label(project: &Project, client: &str) -> String {
-        format!(
-            "{} · {}",
-            project.name,
-            if client == "codex" {
-                "Codex"
-            } else {
-                "Claude Code"
-            }
-        )
+        format!("{} · {}", project.name, configuration::client_name(client))
     }
 }
 /// After an engine setting changes, rewrites every entry this app manages that
@@ -987,13 +984,8 @@ pub fn preview_previous_config(
         .filter_map(|(key, fp)| managed_client(&target.name, &key).map(|client| (client, fp)))
         .collect();
     p.canonical_path = previous_root.clone();
-    let mut preview = configuration::preview(
-        &p,
-        &["codex".into(), "claude".into()],
-        "remove",
-        &target,
-        &managed,
-    )?;
+    let mut preview =
+        configuration::preview(&p, &CLIENTS.map(String::from), "remove", &target, &managed)?;
     preview.validated_root = Some(previous_root);
     state
         .previews

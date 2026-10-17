@@ -1,6 +1,8 @@
 //! Per-engine tool filtering. Codex hides the tools an entry lists under
-//! `disabled_tools`; Claude Code hides tools named by bare deny rules in the
-//! project's `.claude/settings.json`. Both follow one disabled list per engine.
+//! `disabled_tools` and Devin those under `disabledTools`; Cursor offers only
+//! the tools under `enabledTools`; Claude Code hides tools named by bare deny
+//! rules in the project's `.claude/settings.json`. All follow one disabled
+//! list per engine.
 use crate::{commands, configuration, models::*, persistence, AppState};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -47,16 +49,31 @@ pub fn disabled(state: &AppState, engine: &str) -> Result<Vec<String>> {
         .remove(engine)
         .unwrap_or_default())
 }
+/// Tools an engine last offered, sorted.
+pub fn known(state: &AppState, engine: &str) -> Result<Vec<String>> {
+    Ok(load::<Tools>(state, KNOWN_SETTING)?
+        .remove(engine)
+        .unwrap_or_default())
+}
 /// Records the tools an engine offered, so settings can list them later.
-pub fn remember(state: &AppState, engine: &str, tools: &[String]) -> Result<()> {
+/// While tools are disabled, Cursor's allowlists follow the new list.
+pub async fn remember(state: &AppState, engine: &str, tools: &[String]) -> Result<()> {
     self::engine(engine)?;
     let mut known: Tools = load(state, KNOWN_SETTING)?;
     let mut tools = tools.to_vec();
     tools.sort();
     tools.dedup();
     if known.get(engine) != Some(&tools) {
-        known.insert(engine.into(), tools);
+        let previous = known.insert(engine.into(), tools).unwrap_or_default();
         store(state, KNOWN_SETTING, &known)?;
+        if !disabled(state, engine)?.is_empty() {
+            // A failed rewrite shows up as "repair" in the MCP list.
+            let _ = commands::resync(state, engine, |mut target| {
+                target.known_tools.clone_from(&previous);
+                target
+            })
+            .await;
+        }
     }
     Ok(())
 }
@@ -104,7 +121,7 @@ pub async fn refresh_engine_tools(
             )
         })?
     };
-    remember(&state, &engine, &tools)?;
+    remember(&state, &engine, &tools).await?;
     Ok(tools)
 }
 

@@ -53,6 +53,7 @@ fn binding_for_platform(windows: bool, env: Environment) -> Target {
             tool_timeout_sec: 600,
         }),
         disabled_tools: vec![],
+        known_tools: vec![],
     }
 }
 

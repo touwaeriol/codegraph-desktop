@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { EngineIcon } from "@/components/EngineIcon";
+import { CLIENTS, clientName } from "@/lib/clients";
 import { call, desktop, message } from "@/lib/ipc";
 import { t } from "@/lib/i18n";
 import type {
@@ -18,8 +19,10 @@ import { EngineStatus } from "./EngineOverview";
 
 type State = RuntimeSnapshot["state"];
 type ConfigState = ConfigStatus["state"];
-export const clientName = (client: Client) =>
-  client === "codex" ? "Codex" : "Claude Code";
+type ClientStates = Partial<Record<Client, ConfigState>>;
+/** An activation in flight: the client it targets, or every client. */
+type Pending = { client: Client | null; engine?: "on" | "off" };
+export { clientName };
 export const engineDescription = (engine: Engine) =>
   ({
     codegraph: t("代码图谱与关系检索"),
@@ -29,10 +32,11 @@ export const engineDescription = (engine: Engine) =>
   })[engine];
 
 /**
- * One-click activation shared by the sidebar markers and the engine list:
- * enabling starts the engine and registers it with the active client,
- * disabling stops it and removes that registration. REA only toggles its
- * registration because clients launch it.
+ * One-click activation shared by the sidebar markers and the engine list.
+ * Each client switch registers the engine with that client, starting it
+ * first; turning off its last client stops it. Sidebar markers enable with
+ * the default client and disable everywhere. REA only toggles registrations
+ * because clients launch it.
  */
 export function useActivation({
   projects,
@@ -45,6 +49,7 @@ export function useActivation({
   confirm,
 }: {
   projects: Project[];
+  /** Default client for the sidebar markers. */
   client: Client;
   codegraph: Record<string, RuntimeSnapshot>;
   serena: Record<string, SerenaSnapshot>;
@@ -58,36 +63,35 @@ export function useActivation({
   }) => void;
 }) {
   const [configs, setConfigs] = useState<
-    Record<string, Partial<Record<Engine, ConfigState>>>
+    Record<string, Partial<Record<Engine, ClientStates>>>
   >({});
-  const [pending, setPending] = useState<Record<string, "on" | "off">>({});
+  const [pending, setPending] = useState<Record<string, Pending>>({});
   const [version, setVersion] = useState(0);
   const requests = useRef(new Map<string, number>());
-  const loadConfig = useCallback(
-    async (projectId: string) => {
-      if (!desktop) return;
-      const request = (requests.current.get(projectId) ?? 0) + 1;
-      requests.current.set(projectId, request);
-      const entries = await Promise.all(
-        ENGINES.map(async (engine) => {
-          const statuses = await call<ConfigStatus[]>(
-            "get_client_config_status",
-            { projectId, engine },
-          ).catch(() => []);
-          return [
-            engine,
-            statuses.find((status) => status.client === client)?.state,
-          ] as const;
-        }),
-      );
-      if (requests.current.get(projectId) === request)
-        setConfigs((old) => ({
-          ...old,
-          [projectId]: Object.fromEntries(entries),
-        }));
-    },
-    [client],
-  );
+  const loadConfig = useCallback(async (projectId: string) => {
+    if (!desktop) return;
+    const request = (requests.current.get(projectId) ?? 0) + 1;
+    requests.current.set(projectId, request);
+    const entries = await Promise.all(
+      ENGINES.map(async (engine) => {
+        const statuses = await call<ConfigStatus[]>(
+          "get_client_config_status",
+          { projectId, engine },
+        ).catch(() => []);
+        return [
+          engine,
+          Object.fromEntries(
+            statuses.map((status) => [status.client, status.state]),
+          ) as ClientStates,
+        ] as const;
+      }),
+    );
+    if (requests.current.get(projectId) === request)
+      setConfigs((old) => ({
+        ...old,
+        [projectId]: Object.fromEntries(entries),
+      }));
+  }, []);
   const projectIds = projects.map((project) => project.id).join("\n");
   useEffect(() => {
     projectIds
@@ -95,11 +99,15 @@ export function useActivation({
       .filter(Boolean)
       .forEach((id) => void loadConfig(id));
   }, [projectIds, loadConfig]);
+  const configuredClients = (projectId: string, engine: Engine) =>
+    CLIENTS.filter(
+      (value) => configs[projectId]?.[engine]?.[value] === "configured",
+    );
   const stateOf = (projectId: string, engine: Engine): State | undefined => {
-    const transition = pending[`${projectId}:${engine}`];
+    const transition = pending[`${projectId}:${engine}`]?.engine;
     if (transition) return transition === "on" ? "starting" : "stopping";
     if (engine === "rea")
-      return configs[projectId]?.rea === "configured" ? "running" : "stopped";
+      return configuredClients(projectId, "rea").length ? "running" : "stopped";
     return {
       codegraph: codegraph[projectId]?.state,
       serena: serena[projectId]?.state ?? "stopped",
@@ -108,24 +116,50 @@ export function useActivation({
   };
   const isOn = (projectId: string, engine: Engine) =>
     stateOf(projectId, engine) === "running";
-  async function activate(project: Project, engine: Engine, enabled: boolean) {
+  async function activate(
+    project: Project,
+    engine: Engine,
+    enabled: boolean,
+    target: Client | null,
+  ) {
     const key = `${project.id}:${engine}`;
-    setPending((old) => ({ ...old, [key]: enabled ? "on" : "off" }));
+    const others = configuredClients(project.id, engine).filter(
+      (value) => value !== target,
+    );
+    const running = isOn(project.id, engine);
+    setPending((old) => ({
+      ...old,
+      [key]: {
+        client: target,
+        engine: enabled
+          ? running
+            ? undefined
+            : "on"
+          : target && others.length
+            ? undefined
+            : "off",
+      },
+    }));
     const name = engineLabel(engine);
     try {
       const result = await call<Activation>("set_engine_enabled", {
         projectId: project.id,
         engine,
         enabled,
+        client: target,
       });
-      const target = clientName(result.client);
+      const targets = result.clients.map(clientName).join(" / ");
       toast.success(
         enabled
           ? t("{0} 已启用，并写入 {1} 项目配置；请在客户端重新加载 MCP", {
               0: name,
-              1: target,
+              1: targets,
             })
-          : t("{0} 已停用，并移除 {1} 项目配置", { 0: name, 1: target }),
+          : result.running
+            ? t("{0} 已从 {1} 项目配置移除", { 0: name, 1: targets })
+            : targets
+              ? t("{0} 已停用，并移除 {1} 项目配置", { 0: name, 1: targets })
+              : t("{0} 已停用", { 0: name }),
       );
       result.warnings.forEach((warning) =>
         toast.warning(warning, { duration: 10000 }),
@@ -158,27 +192,59 @@ export function useActivation({
       await Promise.all([refresh(), loadConfig(project.id)]).catch(() => {});
     }
   }
-  function toggle(project: Project, engine: Engine) {
-    const state = stateOf(project.id, engine);
-    if (state === "starting" || state === "stopping") return;
-    const enabled = state !== "running";
+  /** Asks before a stop that would disconnect CodeGraph sessions. */
+  function guard(
+    project: Project,
+    engine: Engine,
+    stops: boolean,
+    action: () => Promise<void>,
+  ) {
     const sessions = codegraph[project.id]?.sessions ?? 0;
-    if (!enabled && engine === "codegraph" && sessions > 0)
+    if (stops && engine === "codegraph" && sessions > 0)
       confirm({
         title: t("停用 {0}", { 0: "CodeGraph" }),
         detail: t("当前 {0} 个会话将断开，客户端需要重新连接。", {
           0: sessions,
         }),
-        action: () => activate(project, engine, false),
+        action,
       });
-    else void activate(project, engine, enabled);
+    else void action();
+  }
+  function toggle(project: Project, engine: Engine) {
+    if (pending[`${project.id}:${engine}`]) return;
+    const state = stateOf(project.id, engine);
+    if (state === "starting" || state === "stopping") return;
+    const enabled = state !== "running";
+    guard(project, engine, !enabled, () =>
+      activate(project, engine, enabled, null),
+    );
+  }
+  function toggleClient(project: Project, engine: Engine, target: Client) {
+    if (pending[`${project.id}:${engine}`]) return;
+    const state = stateOf(project.id, engine);
+    if (state === "starting" || state === "stopping") return;
+    const configured = configuredClients(project.id, engine);
+    const enabled = !configured.includes(target);
+    const stops = !enabled && configured.length === 1;
+    guard(project, engine, stops, () =>
+      activate(project, engine, enabled, target),
+    );
   }
   return {
     stateOf,
     isOn,
     toggle,
+    toggleClient,
+    /** The client a pending activation targets; null means every client. */
+    pendingClient: (projectId: string, engine: Engine) =>
+      pending[`${projectId}:${engine}`]?.client,
+    busy: (projectId: string, engine: Engine) =>
+      !!pending[`${projectId}:${engine}`],
+    clientState: (projectId: string, engine: Engine, value: Client) =>
+      configs[projectId]?.[engine]?.[value],
+    /** Whether any client registers the engine. */
     configured: (projectId: string, engine: Engine) =>
-      configs[projectId]?.[engine],
+      configuredClients(projectId, engine).length > 0,
     reloadConfig: loadConfig,
     /** Bumps after every activation so open config views can reload. */
     version,
@@ -198,32 +264,30 @@ export function ClientSwitch({
   label: string;
 }) {
   return (
-    <div className="mcp-client-picker" role="group" aria-label={label}>
-      {(["codex", "claude"] as const).map((value) => (
-        <button
-          key={value}
-          type="button"
-          aria-pressed={client === value}
-          disabled={disabled}
-          onClick={() => onChange(value)}
-        >
+    <select
+      className="client-select"
+      aria-label={label}
+      value={client}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value as Client)}
+    >
+      {CLIENTS.map((value) => (
+        <option key={value} value={value}>
           {clientName(value)}
-        </button>
+        </option>
       ))}
-    </div>
+    </select>
   );
 }
 
 export function EngineList({
   project,
   engine,
-  client,
   activation,
   select,
 }: {
   project: Project;
   engine: Engine;
-  client: Client;
   activation: ActivationRuntime;
   select: (engine: Engine) => void;
 }) {
@@ -232,9 +296,8 @@ export function EngineList({
       {ENGINES.map((value) => {
         const name = engineLabel(value);
         const state = activation.stateOf(project.id, value);
-        const configured =
-          activation.configured(project.id, value) === "configured";
-        const transitional = state === "starting" || state === "stopping";
+        const busy = activation.busy(project.id, value);
+        const target = activation.pendingClient(project.id, value);
         return (
           <div
             key={value}
@@ -261,28 +324,65 @@ export function EngineList({
             ) : (
               <EngineStatus snapshot={state ? { state } : undefined} />
             )}
-            <span
-              className="engine-list-config"
-              data-configured={configured}
-              title={t("当前客户端：{0}", { 0: clientName(client) })}
+            <div
+              className="engine-clients"
+              role="group"
+              aria-label={t("{0} 写入的客户端", { 0: name })}
             >
-              {configured
-                ? t("已注入 {0}", { 0: clientName(client) })
-                : t("未注入 {0}", { 0: clientName(client) })}
-            </span>
-            <label className="mcp-switch">
-              <input
-                type="checkbox"
-                role="switch"
-                aria-label={t("启用 {0}", { 0: name })}
-                checked={state === "running" || state === "starting"}
-                disabled={!desktop || transitional}
-                onChange={() => activation.toggle(project, value)}
-              />
-              <span className="mcp-switch-track" aria-hidden="true">
-                <span />
-              </span>
-            </label>
+              {CLIENTS.map((client) => {
+                const config = activation.clientState(
+                  project.id,
+                  value,
+                  client,
+                );
+                const on = config === "configured";
+                const saving = busy && (target === client || target === null);
+                const label = clientName(client);
+                return (
+                  <label
+                    key={client}
+                    className="engine-client"
+                    data-client={client}
+                    data-state={config ?? "unknown"}
+                    title={
+                      config === "repair" || config === "parseError"
+                        ? t("{0} 中的配置需要检查，请在 MCP 配置中处理", {
+                            0: label,
+                          })
+                        : on
+                          ? t("已注入 {0}", { 0: label })
+                          : t("未注入 {0}", { 0: label })
+                    }
+                  >
+                    <span>{label}</span>
+                    <span className="mcp-switch">
+                      <input
+                        type="checkbox"
+                        role="switch"
+                        aria-label={t("在 {1} 中启用 {0}", {
+                          0: name,
+                          1: label,
+                        })}
+                        aria-busy={saving}
+                        checked={on}
+                        disabled={
+                          !desktop ||
+                          busy ||
+                          config === undefined ||
+                          config === "parseError"
+                        }
+                        onChange={() =>
+                          activation.toggleClient(project, value, client)
+                        }
+                      />
+                      <span className="mcp-switch-track" aria-hidden="true">
+                        <span />
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
           </div>
         );
       })}

@@ -66,8 +66,8 @@ export const english = {
   "首次启动或测试会通过 npx 下载固定版本的 rea-agents，需要访问 npm registry。Ghidra、JADX 等可在设置中一键安装，商业工具及其许可证由用户自行准备。":
     "The first launch or test downloads a pinned rea-agents version through npx and requires npm registry access. Ghidra, JADX and other open-source tools can be installed from Settings; supply commercial tools and their licenses yourself.",
   "REA 官方项目与安装说明 ↗": "REA project and installation guide ↗",
-  "REA 由 Codex / Claude Code 按需启动，无需在桌面启动实例或建立 CodeGraph 索引。退出桌面应用不影响客户端的 REA 进程。":
-    "Codex / Claude Code launches REA on demand. No desktop instance or CodeGraph index is required. Exiting the desktop app does not stop the client's REA process.",
+  "REA 由 Codex、Claude Code、Cursor 或 Devin 按需启动，无需在桌面启动实例或建立 CodeGraph 索引。退出桌面应用不影响客户端的 REA 进程。":
+    "Codex, Claude Code, Cursor, or Devin launches REA on demand. No desktop instance or CodeGraph index is required. Exiting the desktop app does not stop the client's REA process.",
   "配置后重新加载客户端并批准 MCP。测试连接会临时启动 REA，仅验证握手和工具列表，完成后回收测试进程。":
     "Reload your client and approve MCP after configuration. Testing temporarily starts REA to verify the handshake and tool list, then stops the test process.",
   "Windows 配置使用 cmd.exe /d /c 启动 npx。项目配置只注册 MCP；配套技能可按 REA 官方说明另行安装。":
@@ -264,8 +264,8 @@ export const english = {
   "你的代码，井然有序": "Your code, organized",
   "添加一个项目，开始管理它的 CodeGraph":
     "Add a project to manage its CodeGraph",
-  "为每个项目维护独立索引与运行实例，让 Codex 和 Claude Code 连接到正确的代码图谱。":
-    "Maintain a dedicated index and instance for each project, so Codex and Claude Code connect to the right code graph.",
+  "为每个项目维护独立索引与运行实例，让 Codex、Claude Code、Cursor 和 Devin 连接到正确的代码图谱。":
+    "Maintain a dedicated index and instance for each project, so Codex, Claude Code, Cursor, and Devin connect to the right code graph.",
   "或按 Ctrl+N 添加项目": "Or press Ctrl+N to add a project",
   选择本地项目: "Choose a local project",
   "项目与 Git worktree 分别管理":
@@ -403,8 +403,8 @@ export const english = {
     "Merge preserves other MCP servers and settings. Overwrite replaces the entire file. Files are backed up and checked for external changes before writing.",
   将修改旧目录中的受管配置:
     "Managed configuration in a previous folder will change",
-  "清理旧目录中的 Codex / Claude Code 条目。请核对下方每个文件路径和删除内容。":
-    "Remove Codex / Claude Code entries from the previous folder. Review every file path and deletion below.",
+  "清理旧目录中各客户端的受管条目。请核对下方每个文件路径和删除内容。":
+    "Remove this app's client entries from the previous folder. Review every file path and deletion below.",
   由合并失败进入修复预览: "Repair preview after a merge failure",
   "服务名：": "Server name: ",
   "也可以在外部编辑器修改文件，然后点击“重新读取 / 刷新预览”。刷新以磁盘最新内容作对比，保留此处的编辑草稿。":
@@ -495,9 +495,15 @@ export const english = {
   "停用 {0}": "Disable {0}",
   "已注入 {0}": "In {0}",
   "未注入 {0}": "Not in {0}",
-  "当前客户端：{0}": "Current client: {0}",
-  已注入当前客户端: "Added to the current client",
-  未注入当前客户端: "Not in the current client",
+  已注入客户端: "Added to a client",
+  未注入任何客户端: "Not in any client",
+  "{0} 已从 {1} 项目配置移除":
+    "{0} is removed from the {1} project configuration",
+  "{0} 已停用": "{0} is disabled",
+  "{0} 写入的客户端": "Clients {0} is added to",
+  "在 {1} 中启用 {0}": "Enable {0} in {1}",
+  "{0} 中的配置需要检查，请在 MCP 配置中处理":
+    "The {0} configuration needs review. Check it under MCP configuration",
   点击停用: "Click to disable",
   点击启用: "Click to enable",
   图标启用写入: "Icons enable in",
@@ -531,12 +537,12 @@ export const english = {
   检查分析引擎: "Check analysis providers",
   就绪: "Ready",
   未就绪: "Not ready",
-  "变量会写入项目的 .codex/config.toml 或 .mcp.json；保存后自动更新已由本应用注入 REA 的项目配置，重新加载客户端后生效。":
-    "Variables are written to the project's .codex/config.toml or .mcp.json. Saving updates every REA entry this app manages; reload the client to apply.",
+  "变量会写入各客户端的项目 MCP 配置；保存后自动更新已由本应用注入 REA 的项目配置，重新加载客户端后生效。":
+    "Variables are written to each client's project MCP configuration. Saving updates every REA entry this app manages; reload the client to apply.",
   工具: "Tools",
   "工具（已停用 {0} / 共 {1}）": "Tools ({0} of {1} disabled)",
-  "取消勾选的工具不会提供给模型：Codex 写入 disabled_tools，Claude Code 写入项目 .claude/settings.json 的 deny 规则。保存后自动更新已由本应用注入的配置。":
-    "Unchecked tools are hidden from the model: Codex receives disabled_tools, and Claude Code receives deny rules in the project's .claude/settings.json. Saving updates every entry this app manages.",
+  "取消勾选的工具不会提供给模型：Codex 与 Devin 写入禁用列表，Cursor 写入其余工具的允许列表，Claude Code 写入项目 .claude/settings.json 的 deny 规则。保存后自动更新已由本应用注入的配置。":
+    "Unchecked tools are hidden from the model: Codex and Devin receive a disabled list, Cursor an allowlist of the remaining tools, and Claude Code deny rules in the project's .claude/settings.json. Saving updates every entry this app manages.",
   筛选工具: "Filter tools",
   获取工具列表: "Load tool list",
   "获取时会临时启动 REA 读取工具列表，完成后结束进程。":

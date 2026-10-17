@@ -12,6 +12,9 @@ src-tauri/gen/
 .codex/
 .codegraph/
 .mcp.json
+.cursor/mcp.json
+.devin/mcp_config.json
+.devin/mcp_config.local.json
 .claude/settings.local.json
 .env
 .env.*

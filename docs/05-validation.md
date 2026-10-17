@@ -2,6 +2,14 @@
 
 日期：2026-10-03。本文件区分已运行检查和仍待完成的发布验收；设计文档中的性能预算不视为测量结果。
 
+## 0.1.30 Cursor 与 Devin 客户端、按客户端开关（2026-10-17）
+
+- 客户端扩展为 Codex、Claude Code、Cursor（`.cursor/mcp.json`）和 Devin（`.devin/mcp_config.json`）。Cursor 条目不写传输类型，由 `command` / `url` 推断；Devin 条目写 `transport`，校验时兼容 Windsurf 的 `serverUrl`。格式依据本机 Cursor 3.25.6 与 Devin 1.126.0（CLI 3000.10.67）安装包内的配置结构确认。
+- 项目页每个引擎为四个客户端各提供一个开关：打开时按需启动引擎并写入该客户端，关闭只移除该客户端，最后一个客户端关闭后停止引擎。侧栏标记启用时写入默认客户端，停用时移除所有受管客户端条目。默认客户端改为下拉选择。
+- 禁用工具：Devin 写入 `disabledTools`；Cursor 写入 `enabledTools` 允许列表（已知工具减去禁用工具，未获取过工具列表时不写），工具列表变化且存在禁用项时自动同步 Cursor 条目。
+- 本机 Devin CLI 在 Git 仓库中读取按本应用格式写入的 `.devin/mcp_config.json`，正确列出 HTTP 与 stdio 条目、含 Windows 路径的 `env` 和 `disabledTools`。Cursor 无命令行工具，未实测读取；真实 Cursor / Devin 会话中的工具调用尚待验收。
+- 本机 Rust 测试（82 通过、5 忽略）、Clippy、格式检查、TypeScript 检查通过；配置测试扩展到四个客户端，新增 Cursor / Devin 格式与归属测试。浏览器模拟 IPC 回归 `activation`（改为按客户端开关与默认客户端下拉）、`config-preview`、`engine-tools`、`environment-detection`、`rea-settings`、`serena` 通过；`language.cjs` 在此前版本已失败。
+
 ## 0.1.29 分析工具随软件目录安装与自动识别（2026-10-17）
 
 - Windows 安装器安装且所在目录可写时，一键安装的工具放在软件目录下的 `rea-tools`（含标记文件 `.codegraph-desktop-tools`）；更新保留该目录，卸载（非更新模式）且存在标记时删除。Program Files 不可写、macOS、Linux 或开发构建仍使用应用数据目录的 `tools`；此前装在应用数据目录的工具继续识别。设置中显示安装位置并可打开目录。

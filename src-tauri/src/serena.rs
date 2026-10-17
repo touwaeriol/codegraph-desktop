@@ -100,6 +100,7 @@ pub fn binding_db(db: &mut rusqlite::Connection, id: &str) -> Result<Target> {
         authorization: None,
         stdio: None,
         disabled_tools: vec![],
+        known_tools: vec![],
     })
 }
 fn candidates(saved: Option<String>) -> Vec<PathBuf> {

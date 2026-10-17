@@ -64,13 +64,17 @@ Windows 安装器自动使用中文或英文，不弹出语言选择窗口。mac
 
 勾选只负责客户端配置；CodeGraph、Serena 与 WarpGrep 仍需启动实例，REA 由客户端启动。配置更新后请重新加载客户端并按客户端要求批准 MCP。
 
-左侧项目名称旁以单行彩色缩写标记 MCP：C（CodeGraph）、S（Serena）、W（WarpGrep）、R（REA）。受管引擎运行时标记填充颜色，停止时淡化，启动或停止中闪烁，异常时显示红色边框；REA 标记填充表示已写入当前客户端配置。悬停可查看完整名称与状态。
+左侧项目名称旁以单行彩色缩写标记 MCP：C（CodeGraph）、S（Serena）、W（WarpGrep）、R（REA）。受管引擎运行时标记填充颜色，停止时淡化，启动或停止中闪烁，异常时显示红色边框；REA 标记填充表示已写入至少一个客户端的配置。悬停可查看完整名称与状态。
 
 ### 一键启用
 
-点击侧栏标记或项目页引擎列表右侧的开关即可一键启用：启动该项目的引擎，成功后把 MCP 写入**当前客户端**的项目配置；再次点击则停止引擎并移除该客户端的配置。REA 没有受管进程，只切换配置。当前客户端由侧栏“图标启用写入”切换（Codex / Claude Code），与 MCP 配置页顶部的客户端选择同步，并跨重启保存。启动失败时不写入配置；缺少前置条件时直接提示并提供“前往设置”：未找到 CodeGraph 或 Serena 入口（Serena 未保存入口时会先自动检测）、WarpGrep 未配置 Morph API Key、REA 找不到 `npx`。Node.js 版本不在 REA 支持范围时只提示警告，不阻止启用。
+支持四个客户端：Codex（`.codex/config.toml`）、Claude Code（`.mcp.json`）、Cursor（`.cursor/mcp.json`）和 Devin（`.devin/mcp_config.json`），均为项目级配置，不修改全局客户端配置。
 
-项目页的四个引擎以纵向列表展示，每行显示运行状态、是否已注入当前客户端和启用开关；点击行切换下方概览、MCP 配置与运行日志。
+项目页的四个引擎以纵向列表展示，每行显示运行状态，并为四个客户端各提供一个开关。打开某个客户端的开关时，若引擎未运行会先启动，成功后把 MCP 写入该客户端的项目配置；关闭开关只移除该客户端的配置，最后一个客户端关闭后停止引擎。REA 没有受管进程，只切换配置。点击行切换下方概览、MCP 配置与运行日志。
+
+侧栏标记是快捷方式：点击启用时启动引擎并写入侧栏“图标启用写入”选择的默认客户端；再次点击则停止引擎并移除所有客户端中由本应用写入的配置。默认客户端与 MCP 配置页顶部的客户端选择同步，并跨重启保存。启动失败时不写入配置；缺少前置条件时直接提示并提供“前往设置”：未找到 CodeGraph 或 Serena 入口（Serena 未保存入口时会先自动检测）、WarpGrep 未配置 Morph API Key、REA 找不到 `npx`。Node.js 版本不在 REA 支持范围时只提示警告，不阻止启用。
+
+各客户端读取项目配置的方式不同：Cursor 和 Devin 需要在客户端中启用或信任项目 MCP；Devin 按 Git 仓库根目录查找 `.devin/mcp_config.json`。设置中禁用的工具，Codex 与 Devin 写入禁用列表，Cursor 写入其余工具的允许列表（需先获取过工具列表），Claude Code 写入 `.claude/settings.json` 的 deny 规则。
 
 CodeGraph 启动时若项目尚未建立索引，会先自动执行 `codegraph init --yes`，完成后继续启动，过程中可取消。手动启动、一键启用、“启动全部 CodeGraph”与重启后恢复均适用；“代码索引”卡片中的同步与重建保持不变。
 
@@ -172,7 +176,7 @@ node scripts/build-desktop.mjs Bundle
 2. 不同项目不共享运行实例、索引数据库或请求队列。
 3. 同一项目的 Codex 与 Claude Code 共用该项目实例，不因新增客户端连接而启动第二个 CodeGraph。
 4. CodeGraph 可共用一份安装；“实例独立”不等于“每个项目重复安装”。
-5. MCP 配置分别写入项目的 `.codex/config.toml` 和 `.mcp.json`，不修改全局客户端配置。
+5. MCP 配置分别写入项目的 `.codex/config.toml`、`.mcp.json`、`.cursor/mcp.json` 和 `.devin/mcp_config.json`，不修改全局客户端配置。
 6. 默认仅本机访问。程序退出时停止受管服务；关闭窗口默认保留托盘运行。
 
 ## 阅读说明

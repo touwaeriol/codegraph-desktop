@@ -11,8 +11,9 @@ const same = (a: string[], b: string[]) =>
   a.length === b.length && a.every((value, index) => value === b[index]);
 
 /**
- * Lets the user hide an engine's tools from the model. Codex receives the
- * list as `disabled_tools`; Claude Code receives deny rules.
+ * Lets the user hide an engine's tools from the model. Codex and Devin
+ * receive the list in their entries, Cursor an allowlist of the remaining
+ * tools, and Claude Code deny rules.
  */
 export function EngineTools({ engine }: { engine: Engine }) {
   const [known, setKnown] = useState<string[]>([]);
@@ -105,7 +106,7 @@ export function EngineTools({ engine }: { engine: Engine }) {
       </summary>
       <p className="text-xs text-muted-foreground leading-5">
         {t(
-          "取消勾选的工具不会提供给模型：Codex 写入 disabled_tools，Claude Code 写入项目 .claude/settings.json 的 deny 规则。保存后自动更新已由本应用注入的配置。",
+          "取消勾选的工具不会提供给模型：Codex 与 Devin 写入禁用列表，Cursor 写入其余工具的允许列表，Claude Code 写入项目 .claude/settings.json 的 deny 规则。保存后自动更新已由本应用注入的配置。",
         )}
       </p>
       <div className="toolbar">

@@ -655,9 +655,7 @@ export default function App() {
                           key={value}
                           engine={value}
                           state={activation.stateOf(p.id, value)}
-                          configured={
-                            activation.configured(p.id, value) === "configured"
-                          }
+                          configured={activation.configured(p.id, value)}
                           onToggle={
                             desktop
                               ? () => activation.toggle(p, value)
@@ -973,7 +971,6 @@ export default function App() {
                   <EngineList
                     project={project}
                     engine={engine}
-                    client={client}
                     activation={activation}
                     select={(value) => {
                       setEngine(value);
@@ -1229,7 +1226,7 @@ export default function App() {
                       </EmptyTitle>
                       <EmptyDescription className="max-w-lg mt-3">
                         {t(
-                          "为每个项目维护独立索引与运行实例，让 Codex 和 Claude Code 连接到正确的代码图谱。",
+                          "为每个项目维护独立索引与运行实例，让 Codex、Claude Code、Cursor 和 Devin 连接到正确的代码图谱。",
                         )}
                       </EmptyDescription>
                     </EmptyHeader>
