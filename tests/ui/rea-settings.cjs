@@ -40,7 +40,10 @@ const assert = require("node:assert/strict");
             REA_GHIDRA_STARTUP_TIMEOUT_MS: "600000",
           },
           saveError: null,
-          installed: { jadx: "D:\\fixture-data\\tools\\jadx.jar" },
+          installed: {
+            jdk: "D:\\fixture-data\\tools\\jdk-21",
+            jadx: "D:\\fixture-data\\tools\\jadx.jar",
+          },
           inUse: {},
         });
         const callbacks = new Map();
@@ -75,6 +78,16 @@ const assert = require("node:assert/strict");
                 directory: "D:\\fixture-data\\tools",
               };
             if (command === "open_rea_tools_directory") return null;
+            if (command === "adopt_rea_tools") {
+              if (test.environment.JAVA_HOME) return null;
+              test.environment.JAVA_HOME = "D:\\fixture-data\\tools\\jdk-21";
+              test.inUse.jdk = true;
+              return {
+                environment: { ...test.environment },
+                updated: [],
+                failed: [],
+              };
+            }
             if (command === "install_rea_tool")
               return new Promise((resolve, reject) => {
                 window.__finishInstall = { resolve, reject };
@@ -183,6 +196,21 @@ const assert = require("node:assert/strict");
         name: zh ? "保存" : "Save",
         exact: true,
       });
+      await page
+        .getByText(
+          zh
+            ? "已识别已安装的分析工具并写入 REA 环境"
+            : "Found installed analysis tools and saved them to the REA environment",
+        )
+        .waitFor();
+      assert.equal(
+        await card.locator("#rea-JAVA_HOME").inputValue(),
+        "D:\\fixture-data\\tools\\jdk-21",
+      );
+      await card
+        .getByTestId("rea-tool-jdk")
+        .getByText(zh ? "使用中" : "In use", { exact: true })
+        .waitFor();
       const check = card.getByRole("button", {
         name: zh ? "检查分析引擎" : "Check analysis providers",
       });
@@ -244,6 +272,7 @@ const assert = require("node:assert/strict");
       assert.deepEqual(saved, {
         REA_ANALYSIS_PROVIDER: "ida",
         GHIDRA_INSTALL_DIR: "   ",
+        JAVA_HOME: "D:\\fixture-data\\tools\\jdk-21",
         REA_IDA_MCP_CONFIG: "C:\\Tools\\ida-mcp.json",
         REA_ADB_PATH: "C:\\Android\\adb.exe",
       });

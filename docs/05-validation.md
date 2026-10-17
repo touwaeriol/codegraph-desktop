@@ -2,6 +2,12 @@
 
 日期：2026-10-03。本文件区分已运行检查和仍待完成的发布验收；设计文档中的性能预算不视为测量结果。
 
+## 0.1.29 分析工具随软件目录安装与自动识别（2026-10-17）
+
+- Windows 安装器安装且所在目录可写时，一键安装的工具放在软件目录下的 `rea-tools`（含标记文件 `.codegraph-desktop-tools`）；更新保留该目录，卸载（非更新模式）且存在标记时删除。Program Files 不可写、macOS、Linux 或开发构建仍使用应用数据目录的 `tools`；此前装在应用数据目录的工具继续识别。设置中显示安装位置并可打开目录。
+- 打开设置时，已安装工具对应的环境变量为空或指向不存在的路径，会自动写入 REA 环境并同步项目配置，不覆盖仍有效的用户路径。安装失败时保存已完成的依赖（如先装好的 JDK）。起因：本机 0.1.28 安装 Ghidra 时 JDK 已装好但 Ghidra 下载中断，`JAVA_HOME` 未写入。
+- 本机 Rust 工作区测试（81 通过、5 忽略）、Clippy、格式检查、TypeScript 检查通过；浏览器模拟 IPC 回归 `rea-settings`（新增自动识别断言）、`engine-tools`、`serena`、`config-preview`、`activation` 通过。修改后的 NSIS 模板未在本机编译，由发布 CI 打包验证；卸载删除工具目录未实测。Ghidra 下载中断的具体原因尚未确认。
+
 ## 0.1.28 REA 运行环境、工具开关与一键安装分析工具（2026-10-17）
 
 - 设置中的 REA 卡片可配置默认分析引擎、Ghidra / JDK / IDA / Hopper / JADX / ILSpy 路径、工具参数描述及其他 REA 环境变量。变量写入项目 MCP 条目的 `env`（Codex `.codex/config.toml`、Claude Code `.mcp.json`），并计入托管条目指纹；保存后自动重写已由本应用注入 REA 且仍为“已配置”状态的项目条目。“检查分析引擎”使用已保存的环境运行 `rea doctor --filter-output scope_checks`。

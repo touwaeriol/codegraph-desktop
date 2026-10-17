@@ -1,13 +1,14 @@
 //! One-click installation of the open-source analysis tools REA uses: a
 //! Temurin JDK 21, Ghidra, the jadx-headless-mcp JAR and ilspycmd. Each tool
-//! lands in the app data directory and its path is saved to REA's environment.
+//! lands next to the installed app on Windows, or in the app data directory,
+//! and its path is saved to REA's environment.
 use crate::{i18n::tr, models::*, rea, AppState};
 use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, OnceLock,
     },
     time::Duration,
 };
@@ -28,8 +29,59 @@ const JADX_URL: &str = "https://github.com/1013503897/jadx-headless-mcp/releases
 const JADX_SHA256: &str = "6e5eacf500b64292bfb73c49797c1958f6ee44646e43e868039ae7feb573ff75";
 const JDK_FEATURE: u32 = 21;
 
-fn tools_dir(state: &AppState) -> PathBuf {
+/// Marks a tools directory the Windows uninstaller may remove.
+const MARKER: &str = ".codegraph-desktop-tools";
+
+/// `rea-tools` next to the executable when the Windows installer placed the
+/// app in a writable directory, so the tools stay with the app across updates
+/// and leave with it on uninstall. Elsewhere (Program Files, signed macOS
+/// bundles, AppImage, system packages) tools go to the app data directory.
+fn install_root() -> Option<PathBuf> {
+    static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        if !cfg!(windows) {
+            return None;
+        }
+        let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+        if !dir.join("uninstall.exe").is_file() {
+            return None;
+        }
+        let tools = dir.join("rea-tools");
+        std::fs::create_dir_all(&tools).ok()?;
+        std::fs::write(tools.join(MARKER), b"").ok()?;
+        Some(tools)
+    })
+    .clone()
+}
+fn legacy_dir(state: &AppState) -> PathBuf {
     state.data.join("tools")
+}
+fn tools_dir(state: &AppState) -> PathBuf {
+    install_root().unwrap_or_else(|| legacy_dir(state))
+}
+/// `relative` under `primary`, unless only an earlier installation under
+/// `legacy` is present.
+fn located_in(
+    primary: &Path,
+    legacy: &Path,
+    relative: &Path,
+    present: fn(&Path) -> bool,
+) -> PathBuf {
+    let path = primary.join(relative);
+    let earlier = legacy.join(relative);
+    if !present(&path) && present(&earlier) {
+        earlier
+    } else {
+        path
+    }
+}
+fn located(state: &AppState, relative: impl AsRef<Path>, present: fn(&Path) -> bool) -> PathBuf {
+    located_in(
+        &tools_dir(state),
+        &legacy_dir(state),
+        relative.as_ref(),
+        present,
+    )
 }
 fn exe(name: &str) -> String {
     if cfg!(windows) {
@@ -39,7 +91,9 @@ fn exe(name: &str) -> String {
     }
 }
 fn jdk_dir(state: &AppState) -> PathBuf {
-    tools_dir(state).join(format!("jdk-{JDK_FEATURE}"))
+    located(state, format!("jdk-{JDK_FEATURE}"), |dir| {
+        has_java(&java_home(dir))
+    })
 }
 /// `JAVA_HOME` inside an extracted Temurin archive.
 fn java_home(jdk: &Path) -> PathBuf {
@@ -52,14 +106,21 @@ fn java_home(jdk: &Path) -> PathBuf {
 fn has_java(home: &Path) -> bool {
     home.join("bin").join(exe("java")).is_file()
 }
+fn has_ghidra(dir: &Path) -> bool {
+    dir.join("Ghidra/application.properties").is_file()
+}
 fn ghidra_dir(state: &AppState) -> PathBuf {
-    tools_dir(state).join(format!("ghidra-{GHIDRA_VERSION}"))
+    located(state, format!("ghidra-{GHIDRA_VERSION}"), has_ghidra)
 }
 fn jadx_jar(state: &AppState) -> PathBuf {
-    tools_dir(state).join(JADX_JAR)
+    located(state, JADX_JAR, Path::is_file)
 }
 fn ilspy_exe(state: &AppState) -> PathBuf {
-    tools_dir(state).join("ilspycmd").join(exe("ilspycmd"))
+    located(
+        state,
+        Path::new("ilspycmd").join(exe("ilspycmd")),
+        Path::is_file,
+    )
 }
 fn text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
@@ -88,35 +149,76 @@ pub fn open_rea_tools_directory(state: State<AppState>) -> Result<()> {
     std::fs::create_dir_all(&directory)?;
     crate::commands::open_directory(&directory)
 }
+/// Each tool with the variable REA reads its path from, that path, and
+/// whether this app's installation is present there.
+fn installations(state: &AppState) -> [(&'static str, &'static str, PathBuf, bool); 4] {
+    let home = java_home(&jdk_dir(state));
+    let ghidra = ghidra_dir(state);
+    let jadx = jadx_jar(state);
+    let ilspy = ilspy_exe(state);
+    [
+        ("jdk", "JAVA_HOME", home.clone(), has_java(&home)),
+        (
+            "ghidra",
+            "GHIDRA_INSTALL_DIR",
+            ghidra.clone(),
+            has_ghidra(&ghidra),
+        ),
+        ("jadx", "REA_JADX_MCP_JAR", jadx.clone(), jadx.is_file()),
+        (
+            "ilspy",
+            "REA_ILSPY_CMD_PATH",
+            ilspy.clone(),
+            ilspy.is_file(),
+        ),
+    ]
+}
+/// Points variables that are unset or name a missing path at the tools this
+/// app installed. Returns `None` when nothing changes.
+fn adopt(
+    mut environment: rea::Environment,
+    installations: &[(&'static str, &'static str, PathBuf, bool)],
+) -> Option<rea::Environment> {
+    let mut changed = false;
+    for (_, key, path, present) in installations {
+        if *present
+            && environment
+                .get(*key)
+                .is_none_or(|value| !Path::new(value).exists())
+        {
+            environment.insert((*key).into(), text(path));
+            changed = true;
+        }
+    }
+    changed.then_some(environment)
+}
+/// Saves installed tools whose paths are missing from REA's environment, such
+/// as the JDK left behind when a Ghidra installation was interrupted.
+#[tauri::command]
+pub async fn adopt_rea_tools(state: State<'_, AppState>) -> Result<Option<rea::EnvironmentSaved>> {
+    if RUNNING.load(Ordering::SeqCst) {
+        return Ok(None);
+    }
+    adopt_installed(&state).await
+}
+async fn adopt_installed(state: &AppState) -> Result<Option<rea::EnvironmentSaved>> {
+    match adopt(rea::environment(state)?, &installations(state)) {
+        Some(environment) => Ok(Some(rea::store_environment(state, environment).await?)),
+        None => Ok(None),
+    }
+}
 #[tauri::command]
 pub fn get_rea_tools(state: State<AppState>) -> Result<Tools> {
     let environment = rea::environment(&state)?;
-    let home = java_home(&jdk_dir(&state));
-    let tool = |id, key: &str, path: PathBuf, present: bool| Tool {
-        id,
-        in_use: present && environment.get(key) == Some(&text(&path)),
-        installed: present.then(|| text(&path)),
-    };
-    let ghidra = ghidra_dir(&state);
-    let jadx = jadx_jar(&state);
-    let ilspy = ilspy_exe(&state);
     Ok(Tools {
-        tools: vec![
-            tool("jdk", "JAVA_HOME", home.clone(), has_java(&home)),
-            tool(
-                "ghidra",
-                "GHIDRA_INSTALL_DIR",
-                ghidra.clone(),
-                ghidra.join("Ghidra/application.properties").is_file(),
-            ),
-            tool("jadx", "REA_JADX_MCP_JAR", jadx.clone(), jadx.is_file()),
-            tool(
-                "ilspy",
-                "REA_ILSPY_CMD_PATH",
-                ilspy.clone(),
-                ilspy.is_file(),
-            ),
-        ],
+        tools: installations(&state)
+            .into_iter()
+            .map(|(id, key, path, present)| Tool {
+                id,
+                in_use: present && environment.get(key) == Some(&text(&path)),
+                installed: present.then(|| text(&path)),
+            })
+            .collect(),
         installing: RUNNING.load(Ordering::SeqCst),
         directory: text(&tools_dir(&state)),
     })
@@ -392,7 +494,7 @@ pub(crate) async fn install(
         "ghidra" => {
             ensure_java(installer, state, &mut environment).await?;
             let dir = ghidra_dir(state);
-            if !dir.join("Ghidra/application.properties").is_file() {
+            if !has_ghidra(&dir) {
                 let archive = downloads(state)?.join(format!("ghidra-{GHIDRA_VERSION}.zip"));
                 installer
                     .download("ghidra", GHIDRA_URL, GHIDRA_SHA256, &archive)
@@ -524,7 +626,11 @@ pub async fn install_rea_tool(
             let state = handle.state::<AppState>();
             let result = match install(&installer, &state, &tool).await {
                 Ok(environment) => rea::store_environment(&state, environment).await,
-                Err(error) => Err(error),
+                Err(error) => {
+                    // Keep dependencies that finished, such as the JDK.
+                    let _ = adopt_installed(&state).await;
+                    Err(error)
+                }
             };
             installer.report(
                 "done",
@@ -603,5 +709,67 @@ mod tests {
         assert!(["windows", "mac", "linux"].contains(&os));
         assert!(["x64", "aarch64"].contains(&arch));
         assert_eq!(extension == "zip", os == "windows");
+    }
+
+    #[test]
+    fn installed_tools_fill_only_unset_or_missing_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let jdk = dir.path().join("jdk-21");
+        let own = dir.path().join("own-ghidra");
+        std::fs::create_dir_all(&jdk).unwrap();
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(dir.path().join("jadx.jar"), b"").unwrap();
+        let installations = [
+            ("jdk", "JAVA_HOME", jdk.clone(), true),
+            (
+                "ghidra",
+                "GHIDRA_INSTALL_DIR",
+                dir.path().join("ghidra"),
+                true,
+            ),
+            (
+                "jadx",
+                "REA_JADX_MCP_JAR",
+                dir.path().join("jadx.jar"),
+                true,
+            ),
+            (
+                "ilspy",
+                "REA_ILSPY_CMD_PATH",
+                dir.path().join("ilspycmd"),
+                false,
+            ),
+        ];
+        let environment = rea::Environment::from([
+            ("GHIDRA_INSTALL_DIR".into(), text(&own)),
+            (
+                "REA_JADX_MCP_JAR".into(),
+                text(&dir.path().join("deleted.jar")),
+            ),
+        ]);
+        let adopted = adopt(environment, &installations).unwrap();
+        assert_eq!(adopted["JAVA_HOME"], text(&jdk));
+        assert_eq!(adopted["GHIDRA_INSTALL_DIR"], text(&own));
+        assert_eq!(
+            adopted["REA_JADX_MCP_JAR"],
+            text(&dir.path().join("jadx.jar"))
+        );
+        assert!(!adopted.contains_key("REA_ILSPY_CMD_PATH"));
+        assert_eq!(adopt(adopted, &installations), None);
+    }
+
+    #[test]
+    fn earlier_installations_are_used_until_the_app_directory_has_the_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let (primary, legacy) = (dir.path().join("app"), dir.path().join("data"));
+        let jar = Path::new(JADX_JAR);
+        let find = || located_in(&primary, &legacy, jar, Path::is_file);
+        assert_eq!(find(), primary.join(jar));
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join(jar), b"").unwrap();
+        assert_eq!(find(), legacy.join(jar));
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::write(primary.join(jar), b"").unwrap();
+        assert_eq!(find(), primary.join(jar));
     }
 }

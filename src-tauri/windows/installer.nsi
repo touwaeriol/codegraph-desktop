@@ -743,6 +743,13 @@ Section Uninstall
   ; Delete uninstaller
   Delete "$INSTDIR\uninstall.exe"
 
+  ; Analysis tools installed from Settings live next to the app. Updates keep
+  ; them; uninstalling removes them only when the app's marker is present.
+  ${If} $UpdateMode <> 1
+  ${AndIf} ${FileExists} "$INSTDIR\rea-tools\.codegraph-desktop-tools"
+    RMDir /r /REBOOTOK "$INSTDIR\rea-tools"
+  ${EndIf}
+
   {{#each resources_ancestors}}
   RMDir /REBOOTOK "$INSTDIR\\{{this}}"
   {{/each}}

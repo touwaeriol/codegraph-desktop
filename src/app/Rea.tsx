@@ -121,6 +121,7 @@ export function ReaSettings() {
   const [busy, setBusy] = useState<"save" | "check" | null>(null);
   const [error, setError] = useState("");
   const [checks, setChecks] = useState<ReaCheck[] | null>(null);
+  const [toolsVersion, setToolsVersion] = useState(0);
   function load(environment: ReaEnvironment) {
     setSaved(environment);
     setValues(
@@ -132,9 +133,29 @@ export function ReaSettings() {
   }
   useEffect(() => {
     if (!desktop) return;
-    call<ReaEnvironment>("get_rea_environment")
-      .then(load)
-      .catch((e) => setError(message(e)));
+    let live = true;
+    // Installed tools fill unset paths before the form shows them.
+    call<ReaEnvironmentSaved | null>("adopt_rea_tools")
+      .then((adopted) => {
+        // Not gated on `live`: the save already happened either way.
+        if (!adopted) return;
+        setToolsVersion((v) => v + 1);
+        toast.success(
+          adopted.updated.length
+            ? t(
+                "已识别已安装的分析工具并写入 REA 环境，已更新 {0} 个项目配置；请在客户端重新加载 MCP",
+                { 0: adopted.updated.length },
+              )
+            : t("已识别已安装的分析工具并写入 REA 环境"),
+        );
+      })
+      .catch((e) => live && setError(message(e)))
+      .then(() => call<ReaEnvironment>("get_rea_environment"))
+      .then((environment) => live && load(environment))
+      .catch((e) => live && setError(message(e)));
+    return () => {
+      live = false;
+    };
   }, []);
   const draft: ReaEnvironment = { ...values };
   for (const [key, value] of custom)
@@ -250,7 +271,7 @@ export function ReaSettings() {
           );
         })}
       </div>
-      <ReaTools onInstalled={load} />
+      <ReaTools onInstalled={load} version={toolsVersion} />
       <details className="engine-install mt-4">
         <summary>{t("其他环境变量（{0}）", { 0: custom.length })}</summary>
         <p className="text-xs text-muted-foreground">

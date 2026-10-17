@@ -602,6 +602,7 @@ pub fn run() {
             rea_tools::install_rea_tool,
             rea_tools::cancel_rea_tool_install,
             rea_tools::open_rea_tools_directory,
+            rea_tools::adopt_rea_tools,
             tools::get_engine_tools,
             tools::refresh_engine_tools,
             tools::save_disabled_tools,

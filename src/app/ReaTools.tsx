@@ -44,13 +44,16 @@ const ITEMS: Record<string, string> = {
 const megabytes = (bytes: number) => (bytes / 1024 / 1024).toFixed(0);
 
 /**
- * Installs the open-source tools REA uses into the app data directory and
- * points REA's environment at them.
+ * Installs the open-source tools REA uses next to the app (or into the app
+ * data directory) and points REA's environment at them.
  */
 export function ReaTools({
   onInstalled,
+  version,
 }: {
   onInstalled: (environment: ReaEnvironment) => void;
+  /** Changes when REA's environment was updated elsewhere. */
+  version: number;
 }) {
   const [list, setList] = useState<ReaToolList | null>(null);
   const [active, setActive] = useState<string | null>(null);
@@ -62,8 +65,10 @@ export function ReaTools({
       .catch((e) => setError(message(e)));
   }, []);
   useEffect(() => {
+    if (desktop) load();
+  }, [load, version]);
+  useEffect(() => {
     if (!desktop) return;
-    load();
     let live = true;
     let dispose: (() => void) | undefined;
     void subscribe<ReaToolProgress>("rea-tool-install", (next) => {
@@ -76,7 +81,7 @@ export function ReaTools({
       live = false;
       dispose?.();
     };
-  }, [load]);
+  }, []);
   async function install(tool: string) {
     setActive(tool);
     setProgress(null);
@@ -106,6 +111,10 @@ export function ReaTools({
         );
     } catch (e) {
       setError(message(e));
+      // Dependencies that finished, such as the JDK, are already saved.
+      void call<ReaEnvironment>("get_rea_environment")
+        .then(onInstalled)
+        .catch(() => {});
     } finally {
       setActive(null);
       setProgress(null);
@@ -122,7 +131,7 @@ export function ReaTools({
       <h3>{t("一键安装分析工具")}</h3>
       <p className="text-xs text-muted-foreground leading-5">
         {t(
-          "从官方发布地址下载并校验 SHA-256，安装到本应用的工具目录，并自动写入 REA 的 MCP 配置；客户端重新加载 MCP 后，REA 即可直接使用。IDA 与 Hopper 为商业软件，请自行安装后填写路径。",
+          "从官方发布地址下载并校验 SHA-256，安装到软件所在目录（该目录不可写或非 Windows 时使用应用数据目录），并自动写入 REA 的 MCP 配置；客户端重新加载 MCP 后，REA 即可直接使用。IDA 与 Hopper 为商业软件，请自行安装后填写路径。",
         )}
       </p>
       {list && (

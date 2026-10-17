@@ -549,9 +549,13 @@ export const english = {
     "Tool settings saved and {0} client configurations updated. Reload MCP in the client",
   工具设置已保存: "Tool settings saved",
   一键安装分析工具: "Install analysis tools",
-  "从官方发布地址下载并校验 SHA-256，安装到本应用的工具目录，并自动写入 REA 的 MCP 配置；客户端重新加载 MCP 后，REA 即可直接使用。IDA 与 Hopper 为商业软件，请自行安装后填写路径。":
-    "Downloads from the official release, verifies SHA-256, installs into this app's tools folder and adds the paths to REA's MCP configuration. REA can use them after the client reloads MCP. IDA and Hopper are commercial; install them yourself and enter their paths.",
+  "从官方发布地址下载并校验 SHA-256，安装到软件所在目录（该目录不可写或非 Windows 时使用应用数据目录），并自动写入 REA 的 MCP 配置；客户端重新加载 MCP 后，REA 即可直接使用。IDA 与 Hopper 为商业软件，请自行安装后填写路径。":
+    "Downloads from the official release, verifies SHA-256, installs next to this app (or into the app data folder when that is not writable or not on Windows) and adds the paths to REA's MCP configuration. REA can use them after the client reloads MCP. IDA and Hopper are commercial; install them yourself and enter their paths.",
   安装位置: "Install location",
+  "已识别已安装的分析工具并写入 REA 环境":
+    "Found installed analysis tools and saved them to the REA environment",
+  "已识别已安装的分析工具并写入 REA 环境，已更新 {0} 个项目配置；请在客户端重新加载 MCP":
+    "Found installed analysis tools, saved them to the REA environment and updated {0} project configurations. Reload MCP in the client",
   "原生二进制分析，约 570 MB，自动附带 JDK 21":
     "Native binary analysis, about 570 MB; installs JDK 21 as needed",
   "Android APK 分析，约 41 MB，自动附带 JDK 21":
